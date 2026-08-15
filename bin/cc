@@ -1,0 +1,20 @@
+#!/bin/sh
+# cc [name] [extra claude args...]
+# Launch Claude Code inside a named tmux session so Clawd Deck can embed it
+# in the browser. With no name, uses the current directory's name plus a
+# time suffix. Re-running with an existing name reattaches instead of
+# starting a second copy.
+if ! command -v tmux >/dev/null 2>&1; then
+  echo "tmux is not installed. Install it with:"
+  echo "  brew install tmux"
+  exit 1
+fi
+
+name="$1"
+if [ -n "$name" ]; then
+  shift
+else
+  name="$(basename "$PWD")-$(date +%H%M%S)"
+fi
+
+exec tmux new-session -A -s "cc-$name" "claude -n \"$name\" $*"

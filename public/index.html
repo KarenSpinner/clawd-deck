@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Clawd Deck</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦞</text></svg>">
+<link rel="stylesheet" href="/vendor/xterm/css/xterm.css">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header id="topbar">
+  <div class="brand">🦞 <strong>Clawd Deck</strong></div>
+  <div id="counts" class="counts"></div>
+  <label class="toggle" title="When a session ends, a background Claude reads it and saves anything worth remembering. Each session close costs one short run, so leave this off unless you want it.">
+    <input type="checkbox" id="autoNudge"> auto-memory on session end
+  </label>
+</header>
+
+<main>
+  <section id="grid" aria-label="Sessions"></section>
+
+  <aside id="sidebar">
+    <nav class="tabs">
+      <button data-tab="todos" class="active">To-dos</button>
+      <button data-tab="artifacts">Artifacts</button>
+      <button data-tab="prs">PRs</button>
+    </nav>
+    <div id="tab-todos" class="tab-panel active"></div>
+    <div id="tab-artifacts" class="tab-panel"></div>
+    <div id="tab-prs" class="tab-panel"></div>
+  </aside>
+</main>
+
+<div id="detail" class="hidden">
+  <header>
+    <button id="detail-close" title="Back to grid">←</button>
+    <div id="detail-title"></div>
+    <div id="detail-meta"></div>
+  </header>
+  <div id="detail-note" class="hidden"></div>
+  <div class="panes">
+    <div id="term-pane" class="hidden">
+      <div id="term"></div>
+    </div>
+    <div id="convo-pane">
+      <div class="pane-head">Conversation <span class="hint">· the copy buttons give you clean text, exactly as written</span></div>
+      <div id="convo"></div>
+    </div>
+  </div>
+</div>
+
+<div id="disconnected" class="hidden">Lost the server. Retrying…</div>
+
+<script src="/vendor/xterm/lib/xterm.js"></script>
+<script src="/vendor/addon-fit/lib/addon-fit.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
