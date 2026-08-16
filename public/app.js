@@ -223,10 +223,30 @@ function renderGrid() {
 
 // ---------------------------------------------------------------- sidebar
 
+// Rebuild a sidebar panel only when its content actually changed, and keep the
+// user's scroll position when it does. Rebuilding on every snapshot emptied the
+// panel for a moment, which snapped its scroll back to the top.
+const sidebarKeys = { todos: null, artifacts: null, prs: null };
+
+function rebuildPanel(panel, keyName, key, build) {
+  if (sidebarKeys[keyName] === key) return;
+  sidebarKeys[keyName] = key;
+  const scrollWas = panel.scrollTop;
+  panel.innerHTML = '';
+  build(panel);
+  panel.scrollTop = scrollWas;
+}
+
 function renderSidebar() {
-  // To-dos
-  const tp = $('#tab-todos');
-  tp.innerHTML = '';
+  rebuildPanel($('#tab-todos'), 'todos',
+    JSON.stringify(state.sessions.map(s => [s.name, s.todos])), renderTodosPanel);
+  rebuildPanel($('#tab-artifacts'), 'artifacts',
+    JSON.stringify(state.sessions.map(s => [s.sessionId, s.name, s.artifactCount])), renderArtifactsPanel);
+  rebuildPanel($('#tab-prs'), 'prs',
+    JSON.stringify([state.prs.mine, state.prs.needsMe, state.prs.error]), renderPrsPanel);
+}
+
+function renderTodosPanel(tp) {
   let anyTodos = false;
   for (const s of state.sessions) {
     if (!s.todos || !s.todos.length) continue;
@@ -244,10 +264,9 @@ function renderSidebar() {
     tp.appendChild(g);
   }
   if (!anyTodos) tp.innerHTML = '<div class="empty">No to-dos yet. When a session writes itself a task list, it shows up here.</div>';
+}
 
-  // Artifacts
-  const ap = $('#tab-artifacts');
-  ap.innerHTML = '';
+function renderArtifactsPanel(ap) {
   let anyArt = false;
   for (const s of state.sessions) {
     if (!s.artifactCount) continue;
@@ -274,10 +293,9 @@ function renderSidebar() {
     }).catch(() => {});
   }
   if (!anyArt) ap.innerHTML = '<div class="empty">Nothing collected yet. Files and links your sessions produce will land here.</div>';
+}
 
-  // PRs
-  const pp = $('#tab-prs');
-  pp.innerHTML = '';
+function renderPrsPanel(pp) {
   const prGroup = (title, list) => {
     const g = document.createElement('div');
     g.className = 'side-group';
@@ -436,23 +454,26 @@ $('#autoNudge').addEventListener('change', (e) => {
 // ---------------------------------------------------------------- live connection
 
 let deepLinked = false;
+let liveSnapshots = false;
+
+function applySnapshot(m) {
+  state = m;
+  renderGrid();
+  renderSidebar();
+  if (detailSessionId) renderDetail(false);
+  // ?session=<id> deep-links straight into a session's detail view
+  if (!deepLinked) {
+    deepLinked = true;
+    const want = new URLSearchParams(location.search).get('session');
+    if (want && state.sessions.some(s => s.sessionId === want)) openDetail(want);
+  }
+}
 
 function connect() {
   const ws = new WebSocket(`ws://${location.host}/ws`);
   ws.onmessage = (ev) => {
     let m; try { m = JSON.parse(ev.data); } catch { return; }
-    if (m.type === 'snapshot') {
-      state = m;
-      renderGrid();
-      renderSidebar();
-      if (detailSessionId) renderDetail(false);
-      // ?session=<id> deep-links straight into a session's detail view
-      if (!deepLinked) {
-        deepLinked = true;
-        const want = new URLSearchParams(location.search).get('session');
-        if (want && state.sessions.some(s => s.sessionId === want)) openDetail(want);
-      }
-    }
+    if (m.type === 'snapshot') { liveSnapshots = true; applySnapshot(m); }
   };
   ws.onopen = () => $('#disconnected').classList.add('hidden');
   ws.onclose = () => {
@@ -461,3 +482,8 @@ function connect() {
   };
 }
 connect();
+
+// paint immediately from a plain fetch; the WebSocket takes over from there
+fetch('/api/state').then(r => r.json())
+  .then(m => { if (!liveSnapshots && m && m.type === 'snapshot') applySnapshot(m); })
+  .catch(() => {});
