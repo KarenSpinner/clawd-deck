@@ -469,11 +469,15 @@ function applySnapshot(m) {
   }
 }
 
+let currentWs = null;
+let lastSnapshotAt = 0;
+
 function connect() {
   const ws = new WebSocket(`ws://${location.host}/ws`);
+  currentWs = ws;
   ws.onmessage = (ev) => {
     let m; try { m = JSON.parse(ev.data); } catch { return; }
-    if (m.type === 'snapshot') { liveSnapshots = true; applySnapshot(m); }
+    if (m.type === 'snapshot') { liveSnapshots = true; lastSnapshotAt = Date.now(); applySnapshot(m); }
   };
   ws.onopen = () => $('#disconnected').classList.add('hidden');
   ws.onclose = () => {
@@ -482,6 +486,19 @@ function connect() {
   };
 }
 connect();
+
+// The server broadcasts every few seconds, so a long silence means the
+// connection died without saying so (laptop sleep does this). Closing the
+// dead socket triggers the normal reconnect path above.
+function nudgeConnection(staleMs) {
+  if (lastSnapshotAt && Date.now() - lastSnapshotAt > staleMs && currentWs) {
+    try { currentWs.close(); } catch {}
+  }
+}
+setInterval(() => nudgeConnection(15000), 10000);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) nudgeConnection(6000);
+});
 
 // paint immediately from a plain fetch; the WebSocket takes over from there
 fetch('/api/state').then(r => r.json())
