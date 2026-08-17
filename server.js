@@ -33,6 +33,7 @@ const ENDED_RETENTION_MS = 60 * 60 * 1000; // keep ended sessions on the board 1
 // sessionId -> session record
 const sessions = new Map();
 const hiddenSessions = new Set(); // our own headless nudge runs — never shown as cards
+const dismissed = new Set();      // ended cards the user closed; cleared if the session returns
 let tmuxSessions = new Set(); // names of live tmux sessions ("cc-foo")
 let prs = { mine: [], needsMe: [], error: null, updatedAt: 0 };
 let config = { autoNudge: false, titles: {} };
@@ -133,7 +134,7 @@ let broadcastTimer = null;
 
 function snapshot() {
   const list = [...sessions.values()]
-    .filter(s => !hiddenSessions.has(s.sessionId))
+    .filter(s => !hiddenSessions.has(s.sessionId) && !dismissed.has(s.sessionId))
     .filter(s => s.alive || (s.endedAt && Date.now() - s.endedAt < ENDED_RETENTION_MS))
     .map(publicSession)
     .sort((a, b) => {
@@ -164,6 +165,7 @@ function pollAgents() {
     for (const a of list) {
       if (!a || !a.sessionId || a.kind !== 'interactive') continue;
       seen.add(a.sessionId);
+      dismissed.delete(a.sessionId);
       const s = getSession(a.sessionId);
       const prevStatus = s.agentStatus;
       s.alive = true;
@@ -562,7 +564,7 @@ app.post('/hook/:event', (req, res) => {
   const s = getSession(id);
   s.lastActivityAt = Date.now();
   attachSubtitle(s);
-  if (req.params.event !== 'SessionEnd') { s.alive = true; s.endedAt = null; }
+  if (req.params.event !== 'SessionEnd') { s.alive = true; s.endedAt = null; dismissed.delete(id); }
   if (b.transcript_path) s.transcriptPath = b.transcript_path;
   if (b.cwd) s.cwd = s.cwd || b.cwd;
   const setHookStatus = (st) => { s.hookStatus = st; s.hookStatusAt = Date.now(); };
@@ -654,6 +656,18 @@ app.post('/api/session/:id/title', (req, res) => {
   saveConfig();
   broadcast();
   res.json({ ok: true, title: title || null });
+});
+
+app.post('/api/session/:id/dismiss', (req, res) => {
+  dismissed.add(req.params.id);
+  broadcast();
+  res.json({ ok: true });
+});
+
+app.post('/api/dismiss-ended', (req, res) => {
+  for (const s of sessions.values()) if (!s.alive) dismissed.add(s.sessionId);
+  broadcast();
+  res.json({ ok: true });
 });
 
 app.post('/api/config', (req, res) => {

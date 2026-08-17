@@ -126,6 +126,16 @@ function renderGrid() {
       b.className = 'badge compacting';
       b.textContent = 'COMPACTING';
       row1.appendChild(b);
+    } else if (s.status === 'ended') {
+      const x = document.createElement('button');
+      x.className = 'dismiss-btn';
+      x.textContent = '×';
+      x.title = 'Remove this card';
+      x.addEventListener('click', (e) => {
+        e.stopPropagation();
+        fetch(`/api/session/${s.sessionId}/dismiss`, { method: 'POST' });
+      });
+      row1.appendChild(x);
     }
     card.appendChild(row1);
 
@@ -212,11 +222,15 @@ function renderGrid() {
   const waiting = state.sessions.filter(s => s.status === 'waiting').length;
   const ready = state.sessions.filter(s => s.status === 'ready').length;
   const working = state.sessions.filter(s => s.status === 'working').length;
-  const live = state.sessions.filter(s => s.status !== 'ended').length;
+  const ended = state.sessions.filter(s => s.status === 'ended').length;
+  const live = state.sessions.length - ended;
   $('#counts').innerHTML =
     `${live} session${live === 1 ? '' : 's'} · ${working} working` +
     (ready ? ` · <span class="readycount">${ready} ready</span>` : '') +
-    (waiting ? ` · <span class="waitcount">${waiting} need${waiting === 1 ? 's' : ''} you</span>` : '');
+    (waiting ? ` · <span class="waitcount">${waiting} need${waiting === 1 ? 's' : ''} you</span>` : '') +
+    (ended ? ` · <button class="linklike" id="clearEnded">clear ${ended} ended</button>` : '');
+  const ce = $('#clearEnded');
+  if (ce) ce.addEventListener('click', () => fetch('/api/dismiss-ended', { method: 'POST' }));
   $('#autoNudge').checked = !!state.config.autoNudge;
   document.title = (waiting ? `(${waiting}) ` : '') + 'Clawd Deck';
 }
