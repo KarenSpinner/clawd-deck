@@ -361,16 +361,31 @@ function renderDetail(fresh) {
   if (fresh) {
     connectTerm(s);
     loadConversation(s.sessionId);
-  } else if (s.embeddable && s.tmuxTarget && !term) {
-    // the session became embeddable after the card was opened (tmux poll lag)
-    connectTerm(s);
+    convoActivityAt = s.lastActivityAt || 0;
+  } else {
+    if (s.embeddable && s.tmuxTarget && !term) {
+      // the session became embeddable after the card was opened (tmux poll lag)
+      connectTerm(s);
+    }
+    // keep the conversation pane current while the session talks, so the
+    // clean-copy text is never behind what the terminal shows
+    if (s.lastActivityAt && s.lastActivityAt !== convoActivityAt) {
+      convoActivityAt = s.lastActivityAt;
+      loadConversation(s.sessionId, true);
+    }
   }
 }
 
-function loadConversation(sessionId) {
+let convoActivityAt = 0;
+
+function loadConversation(sessionId, quiet) {
   const convo = $('#convo');
-  convo.innerHTML = '<div class="empty">loading the conversation…</div>';
+  if (!quiet) convo.innerHTML = '<div class="empty">loading the conversation…</div>';
   fetch(`/api/session/${sessionId}/conversation`).then(r => r.json()).then(data => {
+    if (sessionId !== detailSessionId) return;
+    // on a quiet refresh, keep the reader's place unless they were at the bottom
+    const nearBottom = convo.scrollHeight - convo.scrollTop - convo.clientHeight < 80;
+    const scrollWas = convo.scrollTop;
     convo.innerHTML = '';
     if (!data.messages || !data.messages.length) {
       convo.innerHTML = '<div class="empty">Nothing to show for this session yet.</div>';
@@ -391,8 +406,8 @@ function loadConversation(sessionId) {
       el.appendChild(body);
       convo.appendChild(el);
     }
-    convo.scrollTop = convo.scrollHeight;
-  }).catch(() => { convo.innerHTML = '<div class="empty">Couldn\'t load this conversation.</div>'; });
+    convo.scrollTop = (!quiet || nearBottom) ? convo.scrollHeight : scrollWas;
+  }).catch(() => { if (!quiet) convo.innerHTML = '<div class="empty">Couldn\'t load this conversation.</div>'; });
 }
 
 // ---------------------------------------------------------------- terminal
