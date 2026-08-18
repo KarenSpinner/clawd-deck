@@ -161,7 +161,7 @@ function renderGrid() {
     const chips = document.createElement('div');
     chips.className = 'chips';
     if (s.cwd) chips.innerHTML += `<span class="chip">${esc(shortPath(s.cwd))}</span>`;
-    if (s.gitBranch) chips.innerHTML += `<span class="chip branch">⎇ ${esc(s.gitBranch)}</span>`;
+    if (s.gitBranch && s.gitBranch !== 'HEAD') chips.innerHTML += `<span class="chip branch">⎇ ${esc(s.gitBranch)}</span>`;
     if ((state.profiles || []).length > 1 && s.accountLabel) {
       const hue = [...String(s.accountLabel)].reduce((a, c) => a + c.charCodeAt(0) * 37, 0) % 360;
       const tip = s.profileId === 'main'
