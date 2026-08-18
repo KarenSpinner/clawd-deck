@@ -17,10 +17,13 @@ The dashboard fixes all three. It watches every session, labels each one in plai
 ```
 cd ~/claude-deck
 npm install
+node setup-hooks.js
 npm start
 ```
 
 Then open [http://localhost:4839](http://localhost:4839). Sessions you already have open appear on their own, usually within a few seconds. Nothing needs restarting.
+
+The `setup-hooks.js` step wires the dashboard's event hooks into your `~/.claude/settings.json`. It only appends what's missing, backs the file up first, and is safe to run again. The dashboard works without it (statuses come from polling), but hooks add instant updates, live to-do lists, and the needs-you notifications.
 
 ## Reading the board
 
@@ -87,6 +90,8 @@ chmod 600 ~/.claude-profiles/personal/token
 ```
 
 The dashboard reads that file and pins every session it starts under that profile to that account, independent of the keychain. The token grants access to the account, so treat the file like a password. From then on, both accounts run at the same time and every chip is truthful.
+
+Wire a new profile's hooks the same way as the main ones: `node setup-hooks.js --dir ~/.claude-profiles/personal`.
 
 ## Memory updates
 
