@@ -75,6 +75,12 @@ body {
   padding: 8px 10px;
 }
 #ns-dialog input:focus { outline: none; border-color: var(--blue); }
+#ns-dialog select {
+  display: block; width: 100%; margin-top: 4px;
+  font: 14px var(--sans); color: var(--text);
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  padding: 8px 10px;
+}
 #ns-err { color: var(--red); font-family: var(--sans); font-size: 13px; min-height: 18px; }
 .ns-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
 .mini.primary { background: var(--blue); border-color: var(--blue); color: #fff; }

@@ -69,6 +69,12 @@ To put `cc` on your PATH, add this to `~/.zshrc` and open a new terminal:
 export PATH="$HOME/claude-deck/bin:$PATH"
 ```
 
+## Multiple Claude accounts
+
+Claude Code keeps one login per config directory, so the dashboard supports profiles: each account gets its own directory, listed in `config.json` under `profiles`. Every card shows a small account chip when more than one profile exists, and the New session dialog gets an account picker. Sessions, transcripts, and memory stay fully separate per account, and both accounts can run at the same time.
+
+To log a profile in for the first time, start a session under it from the dashboard; the embedded terminal shows Claude's login flow, and you sign in right there. One honest limit: sessions from before profiles existed can't be attributed to an account after the fact, and the main profile's chip always reflects whoever is logged into `~/.claude` right now. If you keep switching that login with `/login`, the chip follows it. One account per profile keeps the labels truthful.
+
 ## Memory updates
 
 The **update memory** button on each card starts a separate background Claude that reads that session's transcript and saves anything durable (preferences, decisions, project state) to that project's memory files. It reports a one-line summary on the card when it's done, and it never touches the live session. Each press costs one short Claude run.

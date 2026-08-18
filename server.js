@@ -50,6 +50,7 @@ function getSession(id) {
   if (!sessions.has(id)) {
     sessions.set(id, {
       sessionId: id,
+      profileId: 'main',
       name: null,
       subtitle: null,      // first prompt from history.jsonl
       cwd: null,
@@ -103,10 +104,13 @@ function effectiveStatus(s) {
 
 function publicSession(s) {
   const t = config.titles[s.sessionId] || {};
+  const prof = profilesCache.find(p => p.id === s.profileId);
   return {
     sessionId: s.sessionId,
     name: t.custom || t.generated || s.name,
     rawName: s.name,
+    account: (prof && (prof.email || prof.id)) || s.profileId,
+    profileId: s.profileId,
     subtitle: s.subtitle,
     cwd: s.cwd,
     gitBranch: s.gitBranch,
@@ -143,7 +147,12 @@ function snapshot() {
       const rank = st => (st === 'waiting' ? 0 : st === 'ready' ? 1 : st === 'working' ? 2 : st === 'idle' ? 3 : 4);
       return rank(a.status) - rank(b.status) || (b.lastActivityAt || 0) - (a.lastActivityAt || 0);
     });
-  return { type: 'snapshot', sessions: list, prs, config, recentDirs: cachedRecentDirs, now: Date.now() };
+  return {
+    type: 'snapshot', sessions: list, prs, config,
+    recentDirs: cachedRecentDirs,
+    profiles: profilesCache.map(p => ({ id: p.id, email: p.email })),
+    now: Date.now(),
+  };
 }
 
 function broadcast() {
@@ -157,9 +166,41 @@ function broadcast() {
 
 // ---------------------------------------------------------------- agents poller
 
+// ---- account profiles ----
+// Each Claude account gets its own config directory (CLAUDE_CONFIG_DIR).
+// 'main' is the default ~/.claude login; extras come from config.json:
+//   "profiles": [{ "id": "personal", "dir": "/Users/you/.claude-profiles/personal" }]
+function readAccountEmail(dir) {
+  const f = dir ? path.join(dir, '.claude.json') : path.join(os.homedir(), '.claude.json');
+  try { return (JSON.parse(fs.readFileSync(f, 'utf8')).oauthAccount || {}).emailAddress || null; }
+  catch { return null; }
+}
+
+let profilesCache = [{ id: 'main', dir: null, email: null }];
+function refreshProfiles() {
+  const profs = [{ id: 'main', dir: null }, ...(config.profiles || [])];
+  for (const p of profs) p.email = readAccountEmail(p.dir);
+  profilesCache = profs;
+}
+refreshProfiles();
+setInterval(refreshProfiles, 60000);
+
+function profileEnvFor(s) {
+  const p = profilesCache.find(x => x.id === (s && s.profileId));
+  return p && p.dir ? { ...process.env, CLAUDE_CONFIG_DIR: p.dir } : process.env;
+}
+
 function pollAgents() {
-  execFile('claude', ['agents', '--json'], { timeout: 10000 }, (err, stdout) => {
-    if (err) return; // claude busy/missing — keep last known state
+  for (const prof of profilesCache) pollAgentsForProfile(prof);
+  execFile(TMUX_BIN, ['list-sessions', '-F', '#{session_name}'], { timeout: 5000 }, (err, stdout) => {
+    tmuxSessions = new Set(err ? [] : stdout.split('\n').filter(Boolean));
+  });
+}
+
+function pollAgentsForProfile(prof) {
+  const env = prof.dir ? { ...process.env, CLAUDE_CONFIG_DIR: prof.dir } : process.env;
+  execFile('claude', ['agents', '--json'], { timeout: 10000, env }, (err, stdout) => {
+    if (err) return; // claude busy, missing, or profile not logged in — keep last known state
     let list;
     try { list = JSON.parse(stdout); } catch { return; }
     if (!Array.isArray(list)) return;
@@ -169,6 +210,7 @@ function pollAgents() {
       seen.add(a.sessionId);
       dismissed.delete(a.sessionId);
       const s = getSession(a.sessionId);
+      s.profileId = prof.id;
       const prevStatus = s.agentStatus;
       s.alive = true;
       s.endedAt = null;
@@ -184,37 +226,41 @@ function pollAgents() {
       attachSubtitle(s);
     }
     for (const s of sessions.values()) {
-      // only the poller may declare dead what the poller has seen; hook-only
-      // sessions (headless runs, race windows) expire by inactivity instead
-      if (s.alive && !seen.has(s.sessionId) && s.agentStatus !== null) {
+      // only this profile's poller may declare its own sessions dead
+      if (s.alive && s.profileId === prof.id && s.agentStatus !== null && !seen.has(s.sessionId)) {
         s.alive = false;
         if (!s.endedAt) s.endedAt = Date.now();
-      }
-      if (s.alive && s.agentStatus === null &&
-          s.lastActivityAt && Date.now() - s.lastActivityAt > 10 * 60 * 1000) {
-        s.alive = false;
-        if (!s.endedAt) s.endedAt = s.lastActivityAt;
-      }
-      // READY that sat unread for 30 min fades to idle so a morning board isn't all blue
-      if (s.hookStatus === 'ready' && Date.now() - s.hookStatusAt > 30 * 60 * 1000) {
-        s.hookStatus = 'idle';
       }
     }
     broadcast();
   });
-  execFile(TMUX_BIN, ['list-sessions', '-F', '#{session_name}'], { timeout: 5000 }, (err, stdout) => {
-    tmuxSessions = new Set(err ? [] : stdout.split('\n').filter(Boolean));
-  });
 }
 setInterval(pollAgents, 3000);
 pollAgents();
+
+// profile-independent sweeps: hook-only sessions expire by inactivity, and
+// READY that sat unread for 30 min fades to idle so a morning board isn't all blue
+setInterval(() => {
+  const now = Date.now();
+  for (const s of sessions.values()) {
+    if (s.alive && s.agentStatus === null &&
+        s.lastActivityAt && now - s.lastActivityAt > 10 * 60 * 1000) {
+      s.alive = false;
+      if (!s.endedAt) s.endedAt = s.lastActivityAt;
+    }
+    if (s.hookStatus === 'ready' && now - s.hookStatusAt > 30 * 60 * 1000) {
+      s.hookStatus = 'idle';
+    }
+  }
+  broadcast();
+}, 15000);
 
 // ---------------------------------------------------------------- history.jsonl (titles)
 
 const historyBySession = new Map(); // sessionId -> { firstPrompt, project, lastTs }
 const recentProjects = new Map();   // project dir -> last prompt timestamp
 let cachedRecentDirs = [];
-let historyOffset = 0;
+const historyOffsets = new Map();   // history file path -> bytes already read
 
 function attachSubtitle(s) {
   if (s.subtitle) return;
@@ -222,29 +268,38 @@ function attachSubtitle(s) {
   if (h) s.subtitle = String(h.firstPrompt).slice(0, 140);
 }
 
+function historyFiles() {
+  const files = [HISTORY_FILE];
+  for (const p of (config.profiles || [])) if (p.dir) files.push(path.join(p.dir, 'history.jsonl'));
+  return files;
+}
+
 function ingestHistory() {
-  let fd;
-  try {
-    const size = fs.statSync(HISTORY_FILE).size;
-    if (size < historyOffset) historyOffset = 0; // rotated
-    if (size === historyOffset) return;
-    fd = fs.openSync(HISTORY_FILE, 'r');
-    const buf = Buffer.alloc(size - historyOffset);
-    fs.readSync(fd, buf, 0, buf.length, historyOffset);
-    historyOffset = size;
-    for (const line of buf.toString('utf8').split('\n')) {
-      if (!line.trim()) continue;
-      let e; try { e = JSON.parse(line); } catch { continue; }
-      if (!e.sessionId || !e.display) continue;
-      const h = historyBySession.get(e.sessionId);
-      if (!h) {
-        historyBySession.set(e.sessionId, { firstPrompt: e.display, project: e.project, lastTs: e.timestamp });
-      } else {
-        h.lastTs = e.timestamp;
+  for (const file of historyFiles()) {
+    let fd;
+    try {
+      const size = fs.statSync(file).size;
+      let offset = historyOffsets.get(file) || 0;
+      if (size < offset) offset = 0; // rotated
+      if (size === offset) continue;
+      fd = fs.openSync(file, 'r');
+      const buf = Buffer.alloc(size - offset);
+      fs.readSync(fd, buf, 0, buf.length, offset);
+      historyOffsets.set(file, size);
+      for (const line of buf.toString('utf8').split('\n')) {
+        if (!line.trim()) continue;
+        let e; try { e = JSON.parse(line); } catch { continue; }
+        if (!e.sessionId || !e.display) continue;
+        const h = historyBySession.get(e.sessionId);
+        if (!h) {
+          historyBySession.set(e.sessionId, { firstPrompt: e.display, project: e.project, lastTs: e.timestamp });
+        } else {
+          h.lastTs = e.timestamp;
+        }
+        if (e.project) recentProjects.set(e.project, e.timestamp || 0);
       }
-      if (e.project) recentProjects.set(e.project, e.timestamp || 0);
-    }
-  } catch {} finally { if (fd !== undefined) try { fs.closeSync(fd); } catch {} }
+    } catch {} finally { if (fd !== undefined) try { fs.closeSync(fd); } catch {} }
+  }
   cachedRecentDirs = [...recentProjects.entries()]
     .sort((a, b) => (b[1] || 0) - (a[1] || 0))
     .map(e => e[0])
@@ -265,11 +320,18 @@ ingestHistory();
 
 let projectDirs = [];
 function refreshProjectDirs() {
-  try {
-    projectDirs = fs.readdirSync(PROJECTS_DIR)
-      .map(d => path.join(PROJECTS_DIR, d))
-      .filter(p => { try { return fs.statSync(p).isDirectory(); } catch { return false; } });
-  } catch { projectDirs = []; }
+  const roots = [PROJECTS_DIR];
+  for (const p of (config.profiles || [])) if (p.dir) roots.push(path.join(p.dir, 'projects'));
+  const dirs = [];
+  for (const root of roots) {
+    try {
+      for (const d of fs.readdirSync(root)) {
+        const full = path.join(root, d);
+        try { if (fs.statSync(full).isDirectory()) dirs.push(full); } catch {}
+      }
+    } catch {}
+  }
+  projectDirs = dirs;
 }
 refreshProjectDirs();
 setInterval(refreshProjectDirs, 60000);
@@ -451,7 +513,7 @@ function pumpTitleQueue() {
     'Write a short descriptive title, 3 to 6 plain words, for a work session that opened with the request below. ' +
     'Reply with the title only — no quotes, no trailing punctuation.\n\nRequest: ' + s.subtitle;
   const child = spawn('claude', ['-p', '--model', 'haiku', '--session-id', hid, prompt],
-    { cwd: os.homedir(), timeout: 60000 });
+    { cwd: os.homedir(), timeout: 60000, env: profileEnvFor(s) });
   let out = '';
   let finished = false;
   child.stdout.on('data', d => { if (out.length < 2000) out += d; });
@@ -546,7 +608,7 @@ function runNudge(s) {
   hiddenSessions.add(nudgeId);
   const child = spawn('claude',
     ['-p', '--session-id', nudgeId, '--permission-mode', 'acceptEdits', prompt],
-    { cwd, timeout: 5 * 60 * 1000 });
+    { cwd, timeout: 5 * 60 * 1000, env: profileEnvFor(s) });
   let out = '';
   child.stdout.on('data', d => { if (out.length < 20000) out += d; });
   child.on('close', (code) => {
@@ -575,7 +637,13 @@ app.post('/hook/:event', (req, res) => {
   s.lastActivityAt = Date.now();
   attachSubtitle(s);
   if (req.params.event !== 'SessionEnd') { s.alive = true; s.endedAt = null; dismissed.delete(id); }
-  if (b.transcript_path) s.transcriptPath = b.transcript_path;
+  if (b.transcript_path) {
+    s.transcriptPath = b.transcript_path;
+    // a transcript under a profile's directory tells us which account this is
+    for (const p of profilesCache) {
+      if (p.dir && b.transcript_path.startsWith(p.dir + path.sep)) { s.profileId = p.id; break; }
+    }
+  }
   if (b.cwd) s.cwd = s.cwd || b.cwd;
   const setHookStatus = (st) => { s.hookStatus = st; s.hookStatusAt = Date.now(); };
   switch (req.params.event) {
@@ -678,7 +746,11 @@ app.post('/api/new-session', (req, res) => {
   if (!fs.existsSync(cwd)) return res.status(400).json({ error: 'folder not found: ' + cwd });
   const target = 'cc-' + name;
   if (tmuxSessions.has(target)) return res.status(400).json({ error: 'a session named ' + name + ' is already running' });
-  execFile(TMUX_BIN, ['new-session', '-d', '-s', target, '-c', cwd, CLAUDE_BIN, '-n', name],
+  const prof = profilesCache.find(p => p.id === String((req.body || {}).profile || 'main')) || profilesCache[0];
+  const args = ['new-session', '-d', '-s', target, '-c', cwd];
+  if (prof.dir) args.push('-e', 'CLAUDE_CONFIG_DIR=' + prof.dir);
+  args.push(CLAUDE_BIN, '-n', name);
+  execFile(TMUX_BIN, args,
     { timeout: 10000 }, (err) => {
       if (err) return res.status(500).json({ error: String(err.message || err).split('\n')[0] });
       tmuxSessions.add(target);

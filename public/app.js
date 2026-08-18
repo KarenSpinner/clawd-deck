@@ -162,6 +162,11 @@ function renderGrid() {
     chips.className = 'chips';
     if (s.cwd) chips.innerHTML += `<span class="chip">${esc(shortPath(s.cwd))}</span>`;
     if (s.gitBranch) chips.innerHTML += `<span class="chip branch">⎇ ${esc(s.gitBranch)}</span>`;
+    if ((state.profiles || []).length > 1 && s.account) {
+      const hue = [...String(s.account)].reduce((a, c) => a + c.charCodeAt(0), 0) % 360;
+      chips.innerHTML += `<span class="chip account" title="${esc(s.account)}"
+        style="color:hsl(${hue},55%,30%);border-color:hsl(${hue},40%,72%);background:hsl(${hue},50%,96%)">⚉ ${esc(String(s.account).split('@')[0])}</span>`;
+    }
     card.appendChild(chips);
 
     if (typeof s.contextPct === 'number') {
@@ -549,6 +554,20 @@ $('#newSession').addEventListener('click', () => {
     o.value = shortPath(d);
     dl.appendChild(o);
   }
+  const aw = $('#ns-acct-wrap');
+  if ((state.profiles || []).length > 1) {
+    aw.classList.remove('hidden');
+    const sel = $('#ns-acct');
+    sel.innerHTML = '';
+    for (const p of state.profiles) {
+      const o = document.createElement('option');
+      o.value = p.id;
+      o.textContent = p.email ? `${p.email} (${p.id})` : `${p.id} (not logged in yet)`;
+      sel.appendChild(o);
+    }
+  } else {
+    aw.classList.add('hidden');
+  }
   $('#ns-err').textContent = '';
   nsOverlay.classList.remove('hidden');
   $('#ns-cwd').focus();
@@ -566,7 +585,11 @@ function startNewSession() {
   fetch('/api/new-session', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, cwd: $('#ns-cwd').value.trim() }),
+    body: JSON.stringify({
+      name,
+      cwd: $('#ns-cwd').value.trim(),
+      profile: $('#ns-acct-wrap').classList.contains('hidden') ? 'main' : $('#ns-acct').value,
+    }),
   }).then(r => r.json()).then(j => {
     if (j.error) { $('#ns-err').textContent = j.error; return; }
     pendingOpen = j.name;
