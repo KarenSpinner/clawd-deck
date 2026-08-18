@@ -403,7 +403,8 @@ function applyConvoVisibility(s) {
   const btn = $('#convo-toggle');
   if (s.embeddable && s.tmuxTarget) {
     btn.classList.remove('hidden');
-    btn.textContent = convoVisible ? 'hide conversation' : 'show conversation';
+    btn.textContent = convoVisible ? 'hide copy-paste view' : 'copy-paste view';
+    btn.title = 'The conversation as clean text, with a copy button on every message and code block';
     $('#convo-pane').classList.toggle('hidden', !convoVisible);
   } else {
     btn.classList.add('hidden');
