@@ -13,6 +13,13 @@
 <header id="topbar">
   <div class="brand">🦞 <strong>Clawd Deck</strong></div>
   <div id="counts" class="counts"></div>
+  <select id="sortSel" class="ctl" title="Order the session cards">
+    <option value="attention">Sort: needs attention</option>
+    <option value="activity">Sort: recent activity</option>
+    <option value="name">Sort: name</option>
+    <option value="context">Sort: context used</option>
+  </select>
+  <button id="newSession" class="ctl btn-new" title="Start a new Claude session you can type into right here">+ New session</button>
   <label class="toggle" title="When a session ends, a background Claude reads it and saves anything worth remembering. Each session close costs one short run, so leave this off unless you want it.">
     <input type="checkbox" id="autoNudge"> auto-memory on session end
   </label>
@@ -38,6 +45,7 @@
     <button id="detail-close" title="Back to grid">←</button>
     <div id="detail-title"></div>
     <div id="detail-meta"></div>
+    <button id="convo-toggle" class="mini hidden">show conversation</button>
   </header>
   <div id="detail-note" class="hidden"></div>
   <div class="panes">
@@ -47,6 +55,24 @@
     <div id="convo-pane">
       <div class="pane-head">Conversation <span class="hint">· the copy buttons give you clean text, exactly as written</span></div>
       <div id="convo"></div>
+    </div>
+  </div>
+</div>
+
+<div id="ns-overlay" class="hidden">
+  <div id="ns-dialog">
+    <h3>New session</h3>
+    <label>Folder
+      <input id="ns-cwd" list="ns-dirs" placeholder="~/some-project" autocomplete="off">
+    </label>
+    <datalist id="ns-dirs"></datalist>
+    <label>Name
+      <input id="ns-name" placeholder="what this session is for" autocomplete="off">
+    </label>
+    <div id="ns-err"></div>
+    <div class="ns-row">
+      <button id="ns-cancel" class="mini">cancel</button>
+      <button id="ns-go" class="mini primary">Start session</button>
     </div>
   </div>
 </div>

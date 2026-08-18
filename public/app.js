@@ -79,13 +79,25 @@ function renderMarkdown(text, container) {
 
 // ---------------------------------------------------------------- grid
 
+let sortMode = localStorage.getItem('deckSort') || 'attention';
+
+function sortSessions(list) {
+  const rank = st => (st === 'waiting' ? 0 : st === 'ready' ? 1 : st === 'working' ? 2 : st === 'idle' ? 3 : 4);
+  const copy = [...list];
+  if (sortMode === 'name') copy.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  else if (sortMode === 'activity') copy.sort((a, b) => (b.lastActivityAt || 0) - (a.lastActivityAt || 0));
+  else if (sortMode === 'context') copy.sort((a, b) => (b.contextPct || 0) - (a.contextPct || 0));
+  else copy.sort((a, b) => rank(a.status) - rank(b.status) || (b.lastActivityAt || 0) - (a.lastActivityAt || 0));
+  return copy;
+}
+
 function renderGrid() {
   const grid = $('#grid');
   grid.innerHTML = '';
   if (!state.sessions.length) {
     grid.innerHTML = '<div class="empty">No sessions yet. Open a Claude Code tab and it will show up here on its own.</div>';
   }
-  for (const s of state.sessions) {
+  for (const s of sortSessions(state.sessions)) {
     const card = document.createElement('div');
     card.className = 'card ' + s.status;
     card.addEventListener('click', () => openDetail(s.sessionId));
@@ -359,22 +371,65 @@ function renderDetail(fresh) {
     `${shortPath(s.cwd || '')}${s.gitBranch ? ' ⎇ ' + s.gitBranch : ''}` +
     `${typeof s.contextPct === 'number' ? ' · context ' + s.contextPct + '%' : ''} · ${s.status}`;
   if (fresh) {
+    // embedded sessions open terminal-first; the conversation pane waits until
+    // asked for (or until the user's last choice says otherwise)
+    convoVisible = (s.embeddable && s.tmuxTarget)
+      ? localStorage.getItem('deckConvo') === 'show'
+      : true;
     connectTerm(s);
-    loadConversation(s.sessionId);
-    convoActivityAt = s.lastActivityAt || 0;
+    applyConvoVisibility(s);
+    if (convoVisible) {
+      loadConversation(s.sessionId);
+      convoActivityAt = s.lastActivityAt || 0;
+    }
   } else {
     if (s.embeddable && s.tmuxTarget && !term) {
       // the session became embeddable after the card was opened (tmux poll lag)
       connectTerm(s);
+      applyConvoVisibility(s);
     }
     // keep the conversation pane current while the session talks, so the
     // clean-copy text is never behind what the terminal shows
-    if (s.lastActivityAt && s.lastActivityAt !== convoActivityAt) {
+    if (convoVisible && s.lastActivityAt && s.lastActivityAt !== convoActivityAt) {
       convoActivityAt = s.lastActivityAt;
       loadConversation(s.sessionId, true);
     }
   }
 }
+
+let convoVisible = true;
+
+function applyConvoVisibility(s) {
+  const btn = $('#convo-toggle');
+  if (s.embeddable && s.tmuxTarget) {
+    btn.classList.remove('hidden');
+    btn.textContent = convoVisible ? 'hide conversation' : 'show conversation';
+    $('#convo-pane').classList.toggle('hidden', !convoVisible);
+  } else {
+    btn.classList.add('hidden');
+    $('#convo-pane').classList.remove('hidden');
+  }
+  // the terminal reclaims or cedes width; refit it after layout settles
+  setTimeout(() => {
+    if (!term || !fitAddon) return;
+    try {
+      fitAddon.fit();
+      if (termWs && termWs.readyState === 1) termWs.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+    } catch {}
+  }, 60);
+}
+
+$('#convo-toggle').addEventListener('click', () => {
+  convoVisible = !convoVisible;
+  localStorage.setItem('deckConvo', convoVisible ? 'show' : 'hide');
+  const s = state.sessions.find(x => x.sessionId === detailSessionId);
+  if (!s) return;
+  applyConvoVisibility(s);
+  if (convoVisible) {
+    loadConversation(s.sessionId);
+    convoActivityAt = s.lastActivityAt || 0;
+  }
+});
 
 let convoActivityAt = 0;
 
@@ -472,6 +527,55 @@ document.querySelectorAll('.tabs button').forEach(btn => {
   });
 });
 
+$('#sortSel').value = sortMode;
+$('#sortSel').addEventListener('change', (e) => {
+  sortMode = e.target.value;
+  localStorage.setItem('deckSort', sortMode);
+  renderGrid();
+});
+
+// ---- new session dialog ----
+let pendingOpen = null;
+const nsOverlay = $('#ns-overlay');
+
+$('#newSession').addEventListener('click', () => {
+  const dl = $('#ns-dirs');
+  dl.innerHTML = '';
+  const dirs = new Set(state.recentDirs || []);
+  for (const s of state.sessions) if (s.cwd) dirs.add(s.cwd);
+  for (const d of dirs) {
+    const o = document.createElement('option');
+    o.value = shortPath(d);
+    dl.appendChild(o);
+  }
+  $('#ns-err').textContent = '';
+  nsOverlay.classList.remove('hidden');
+  $('#ns-cwd').focus();
+});
+
+$('#ns-cancel').addEventListener('click', () => nsOverlay.classList.add('hidden'));
+nsOverlay.addEventListener('click', (e) => { if (e.target === nsOverlay) nsOverlay.classList.add('hidden'); });
+
+function startNewSession() {
+  let name = $('#ns-name').value.trim();
+  if (!name) {
+    const base = ($('#ns-cwd').value.trim().split('/').filter(Boolean).pop() || 'session');
+    name = base + '-' + new Date().toTimeString().slice(0, 5).replace(':', '');
+  }
+  fetch('/api/new-session', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, cwd: $('#ns-cwd').value.trim() }),
+  }).then(r => r.json()).then(j => {
+    if (j.error) { $('#ns-err').textContent = j.error; return; }
+    pendingOpen = j.name;
+    nsOverlay.classList.add('hidden');
+    $('#ns-name').value = '';
+  }).catch(() => { $('#ns-err').textContent = 'could not reach the server'; });
+}
+$('#ns-go').addEventListener('click', startNewSession);
+$('#ns-dialog').addEventListener('keydown', (e) => { if (e.key === 'Enter') startNewSession(); });
+
 $('#autoNudge').addEventListener('change', (e) => {
   fetch('/api/config', {
     method: 'POST',
@@ -490,6 +594,11 @@ function applySnapshot(m) {
   renderGrid();
   renderSidebar();
   if (detailSessionId) renderDetail(false);
+  // a session just started from the dashboard: open it as soon as it appears
+  if (pendingOpen) {
+    const s = state.sessions.find(x => x.rawName === pendingOpen);
+    if (s) { pendingOpen = null; openDetail(s.sessionId); }
+  }
   // ?session=<id> deep-links straight into a session's detail view
   if (!deepLinked) {
     deepLinked = true;

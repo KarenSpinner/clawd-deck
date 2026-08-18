@@ -18,9 +18,11 @@ const path = require('path');
 const os = require('os');
 
 const PORT = 4839;
-// LaunchAgents get a minimal PATH, so resolve tmux explicitly
+// LaunchAgents get a minimal PATH, so resolve binaries explicitly
 const TMUX_BIN = ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux']
   .find(p => { try { return fs.existsSync(p); } catch { return false; } }) || 'tmux';
+const CLAUDE_BIN = [path.join(os.homedir(), '.local/bin/claude'), '/opt/homebrew/bin/claude', '/usr/local/bin/claude']
+  .find(p => { try { return fs.existsSync(p); } catch { return false; } }) || 'claude';
 const CONTEXT_WINDOW = 1_000_000; // claude-fable-5[1m]
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
@@ -141,7 +143,7 @@ function snapshot() {
       const rank = st => (st === 'waiting' ? 0 : st === 'ready' ? 1 : st === 'working' ? 2 : st === 'idle' ? 3 : 4);
       return rank(a.status) - rank(b.status) || (b.lastActivityAt || 0) - (a.lastActivityAt || 0);
     });
-  return { type: 'snapshot', sessions: list, prs, config, now: Date.now() };
+  return { type: 'snapshot', sessions: list, prs, config, recentDirs: cachedRecentDirs, now: Date.now() };
 }
 
 function broadcast() {
@@ -210,6 +212,8 @@ pollAgents();
 // ---------------------------------------------------------------- history.jsonl (titles)
 
 const historyBySession = new Map(); // sessionId -> { firstPrompt, project, lastTs }
+const recentProjects = new Map();   // project dir -> last prompt timestamp
+let cachedRecentDirs = [];
 let historyOffset = 0;
 
 function attachSubtitle(s) {
@@ -238,8 +242,14 @@ function ingestHistory() {
       } else {
         h.lastTs = e.timestamp;
       }
+      if (e.project) recentProjects.set(e.project, e.timestamp || 0);
     }
   } catch {} finally { if (fd !== undefined) try { fs.closeSync(fd); } catch {} }
+  cachedRecentDirs = [...recentProjects.entries()]
+    .sort((a, b) => (b[1] || 0) - (a[1] || 0))
+    .map(e => e[0])
+    .filter(p => { try { return fs.existsSync(p); } catch { return false; } })
+    .slice(0, 15);
   // attach subtitles to known sessions
   for (const s of sessions.values()) {
     if (!s.subtitle) {
@@ -656,6 +666,25 @@ app.post('/api/session/:id/title', (req, res) => {
   saveConfig();
   broadcast();
   res.json({ ok: true, title: title || null });
+});
+
+// Start a new Claude session inside tmux, embeddable from the browser.
+app.post('/api/new-session', (req, res) => {
+  const name = String((req.body || {}).name || '').trim()
+    .replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+  if (!name) return res.status(400).json({ error: 'give the session a name' });
+  let cwd = String((req.body || {}).cwd || '').trim().replace(/^~(?=\/|$)/, os.homedir());
+  if (!cwd) cwd = os.homedir();
+  if (!fs.existsSync(cwd)) return res.status(400).json({ error: 'folder not found: ' + cwd });
+  const target = 'cc-' + name;
+  if (tmuxSessions.has(target)) return res.status(400).json({ error: 'a session named ' + name + ' is already running' });
+  execFile(TMUX_BIN, ['new-session', '-d', '-s', target, '-c', cwd, CLAUDE_BIN, '-n', name],
+    { timeout: 10000 }, (err) => {
+      if (err) return res.status(500).json({ error: String(err.message || err).split('\n')[0] });
+      tmuxSessions.add(target);
+      setTimeout(pollAgents, 700);
+      res.json({ ok: true, name, target });
+    });
 });
 
 app.post('/api/session/:id/dismiss', (req, res) => {
