@@ -71,9 +71,22 @@ export PATH="$HOME/claude-deck/bin:$PATH"
 
 ## Multiple Claude accounts
 
-Claude Code keeps one login per config directory, so the dashboard supports profiles: each account gets its own directory, listed in `config.json` under `profiles`. Every card shows a small account chip when more than one profile exists, and the New session dialog gets an account picker. Sessions, transcripts, and memory stay fully separate per account, and both accounts can run at the same time.
+The dashboard supports account profiles, listed in `config.json` under `profiles`. Each profile gets its own config directory, its own sessions, transcripts, and memory, an account chip on its cards, and an entry in the New session dialog's account picker.
 
-To log a profile in for the first time, start a session under it from the dashboard; the embedded terminal shows Claude's login flow, and you sign in right there. One honest limit: sessions from before profiles existed can't be attributed to an account after the fact, and the main profile's chip always reflects whoever is logged into `~/.claude` right now. If you keep switching that login with `/login`, the chip follows it. One account per profile keeps the labels truthful.
+One thing to understand about how Claude Code works on a Mac: interactive logins live in a single shared keychain entry, no matter which config directory a session uses. Running `/login` anywhere switches the account for every session that relies on that shared login. So the main profile's chip describes a shared login, not a per-session fact, and its tooltip says so.
+
+To give a second profile its own account for real, use a long-lived token instead of the shared login:
+
+1. Pick a quiet moment (the swap below briefly affects running sessions).
+2. `/login` to the second account in any terminal, then run `claude setup-token` and copy the token it prints.
+3. `/login` back to your usual account.
+4. Save the token as a single line in the profile's directory, named `token`, and make it private:
+
+```
+chmod 600 ~/.claude-profiles/personal/token
+```
+
+The dashboard reads that file and pins every session it starts under that profile to that account, independent of the keychain. The token grants access to the account, so treat the file like a password. From then on, both accounts run at the same time and every chip is truthful.
 
 ## Memory updates
 

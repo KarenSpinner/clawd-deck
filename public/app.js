@@ -162,10 +162,13 @@ function renderGrid() {
     chips.className = 'chips';
     if (s.cwd) chips.innerHTML += `<span class="chip">${esc(shortPath(s.cwd))}</span>`;
     if (s.gitBranch) chips.innerHTML += `<span class="chip branch">⎇ ${esc(s.gitBranch)}</span>`;
-    if ((state.profiles || []).length > 1 && s.account) {
-      const hue = [...String(s.account)].reduce((a, c) => a + c.charCodeAt(0), 0) % 360;
-      chips.innerHTML += `<span class="chip account" title="${esc(s.account)}"
-        style="color:hsl(${hue},55%,30%);border-color:hsl(${hue},40%,72%);background:hsl(${hue},50%,96%)">⚉ ${esc(String(s.account).split('@')[0])}</span>`;
+    if ((state.profiles || []).length > 1 && s.accountLabel) {
+      const hue = [...String(s.accountLabel)].reduce((a, c) => a + c.charCodeAt(0) * 37, 0) % 360;
+      const tip = s.profileId === 'main'
+        ? 'Shared main login, currently ' + (s.account || 'unknown') + '. Running /login in any main session switches all of them.'
+        : (s.account || 'own login, separate from the main one');
+      chips.innerHTML += `<span class="chip account" title="${esc(tip)}"
+        style="color:hsl(${hue},55%,30%);border-color:hsl(${hue},40%,72%);background:hsl(${hue},50%,96%)">⚉ ${esc(s.accountLabel)}</span>`;
     }
     card.appendChild(chips);
 
@@ -533,6 +536,15 @@ document.querySelectorAll('.tabs button').forEach(btn => {
   });
 });
 
+function applySidebar() {
+  document.body.classList.toggle('no-sidebar', localStorage.getItem('deckSidebar') === 'closed');
+}
+$('#sideToggle').addEventListener('click', () => {
+  localStorage.setItem('deckSidebar', localStorage.getItem('deckSidebar') === 'closed' ? 'open' : 'closed');
+  applySidebar();
+});
+applySidebar();
+
 $('#sortSel').value = sortMode;
 $('#sortSel').addEventListener('change', (e) => {
   sortMode = e.target.value;
@@ -562,7 +574,7 @@ $('#newSession').addEventListener('click', () => {
     for (const p of state.profiles) {
       const o = document.createElement('option');
       o.value = p.id;
-      o.textContent = p.email ? `${p.email} (${p.id})` : `${p.id} (not logged in yet)`;
+      o.textContent = p.label + ' — ' + (p.email || (p.hasToken ? 'own token login' : 'not set up yet'));
       sel.appendChild(o);
     }
   } else {

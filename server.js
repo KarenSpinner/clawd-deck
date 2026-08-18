@@ -109,7 +109,8 @@ function publicSession(s) {
     sessionId: s.sessionId,
     name: t.custom || t.generated || s.name,
     rawName: s.name,
-    account: (prof && (prof.email || prof.id)) || s.profileId,
+    account: (prof && prof.email) || null,
+    accountLabel: (prof && prof.label) || s.profileId,
     profileId: s.profileId,
     subtitle: s.subtitle,
     cwd: s.cwd,
@@ -150,7 +151,7 @@ function snapshot() {
   return {
     type: 'snapshot', sessions: list, prs, config,
     recentDirs: cachedRecentDirs,
-    profiles: profilesCache.map(p => ({ id: p.id, email: p.email })),
+    profiles: profilesCache.map(p => ({ id: p.id, label: p.label, email: p.email, hasToken: !!p.token })),
     now: Date.now(),
   };
 }
@@ -176,18 +177,37 @@ function readAccountEmail(dir) {
   catch { return null; }
 }
 
-let profilesCache = [{ id: 'main', dir: null, email: null }];
+let profilesCache = [{ id: 'main', dir: null, email: null, label: 'work', token: null }];
 function refreshProfiles() {
-  const profs = [{ id: 'main', dir: null }, ...(config.profiles || [])];
-  for (const p of profs) p.email = readAccountEmail(p.dir);
+  const profs = [{ id: 'main', dir: null, label: config.mainLabel || 'work' },
+    ...(config.profiles || []).map(p => ({ ...p }))];
+  for (const p of profs) {
+    p.label = p.label || p.id;
+    p.email = readAccountEmail(p.dir);
+    // a long-lived token (from `claude setup-token`) saved as {dir}/token pins
+    // this profile to its own account, independent of the shared macOS keychain
+    p.token = null;
+    if (p.dir) {
+      try {
+        const t = fs.readFileSync(path.join(p.dir, 'token'), 'utf8').trim();
+        if (t) p.token = t;
+      } catch {}
+    }
+  }
   profilesCache = profs;
 }
 refreshProfiles();
 setInterval(refreshProfiles, 60000);
 
+function profileEnv(prof) {
+  const env = { ...process.env };
+  if (prof && prof.dir) env.CLAUDE_CONFIG_DIR = prof.dir;
+  if (prof && prof.token) env.CLAUDE_CODE_OAUTH_TOKEN = prof.token;
+  return env;
+}
+
 function profileEnvFor(s) {
-  const p = profilesCache.find(x => x.id === (s && s.profileId));
-  return p && p.dir ? { ...process.env, CLAUDE_CONFIG_DIR: p.dir } : process.env;
+  return profileEnv(profilesCache.find(x => x.id === (s && s.profileId)));
 }
 
 function pollAgents() {
@@ -198,8 +218,7 @@ function pollAgents() {
 }
 
 function pollAgentsForProfile(prof) {
-  const env = prof.dir ? { ...process.env, CLAUDE_CONFIG_DIR: prof.dir } : process.env;
-  execFile('claude', ['agents', '--json'], { timeout: 10000, env }, (err, stdout) => {
+  execFile('claude', ['agents', '--json'], { timeout: 10000, env: profileEnv(prof) }, (err, stdout) => {
     if (err) return; // claude busy, missing, or profile not logged in — keep last known state
     let list;
     try { list = JSON.parse(stdout); } catch { return; }
@@ -749,6 +768,7 @@ app.post('/api/new-session', (req, res) => {
   const prof = profilesCache.find(p => p.id === String((req.body || {}).profile || 'main')) || profilesCache[0];
   const args = ['new-session', '-d', '-s', target, '-c', cwd];
   if (prof.dir) args.push('-e', 'CLAUDE_CONFIG_DIR=' + prof.dir);
+  if (prof.token) args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=' + prof.token);
   args.push(CLAUDE_BIN, '-n', name);
   execFile(TMUX_BIN, args,
     { timeout: 10000 }, (err) => {
