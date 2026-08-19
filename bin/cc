@@ -17,4 +17,12 @@ else
   name="$(basename "$PWD")-$(date +%H%M%S)"
 fi
 
-exec tmux new-session -A -s "cc-$name" "claude -n \"$name\" $*"
+# mouse on + wheel bindings: the wheel scrolls tmux history (readable, no
+# selection highlight) in a terminal tab and in the dashboard's embedded view
+# alike, instead of reaching claude as prompt-history cycling
+# classic renderer: claude's fullscreen default (new accounts) has no terminal
+# scrollback, so sessions would not scroll here or in the dashboard
+exec tmux new-session -A -s "cc-$name" "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 claude -n \"$name\" $*" \
+  \; set-option mouse on \
+  \; bind-key -T root WheelUpPane if-shell -F -t = '#{alternate_on}' 'send-keys -M' 'copy-mode -e ; send-keys -M' \
+  \; bind-key -T root WheelDownPane if-shell -F -t = '#{alternate_on}' 'send-keys -M' ''
