@@ -661,12 +661,16 @@ function scanArtifacts(s) {
   s.artifacts = { files: [...files], urls: [...urls] };
 }
 
-setInterval(() => {
+function scanAllArtifacts() {
   for (const s of sessions.values()) {
     if (s.alive && sessionKinds.get(s.sessionId) !== 'machinery') scanArtifacts(s);
   }
   broadcast();
-}, 60000);
+}
+setInterval(scanAllArtifacts, 60000);
+// don't leave the file chips blank for a minute after a server restart —
+// scan as soon as the pollers have had a moment to find the sessions
+setTimeout(scanAllArtifacts, 8000);
 
 // ---------------------------------------------------------------- descriptive titles
 
@@ -986,8 +990,11 @@ app.post('/api/new-session', (req, res) => {
   if (prof.token) args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=' + prof.token);
   args.push(CLAUDE_BIN, '-n', name);
   // mouse on: wheel scrolling reaches tmux (copy-mode history) or the app,
-  // so the embedded terminal can scroll instead of being a fixed screen
-  args.push(';', 'set-option', '-t', target, 'mouse', 'on', ...TMUX_WHEEL_BINDINGS);
+  // so the embedded terminal can scroll instead of being a fixed screen.
+  // status off: the deck header already names the session, so tmux's green
+  // status bar is pure noise in the embedded view
+  args.push(';', 'set-option', '-t', target, 'mouse', 'on',
+    ';', 'set-option', '-t', target, 'status', 'off', ...TMUX_WHEEL_BINDINGS);
   execFile(TMUX_BIN, args,
     { timeout: 10000 }, (err) => {
       if (err) return res.status(500).json({ error: String(err.message || err).split('\n')[0] });
@@ -1061,6 +1068,7 @@ const noStale = { setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache'
 app.use('/vendor/xterm', express.static(path.join(__dirname, 'node_modules/@xterm/xterm'), noStale));
 app.use('/vendor/addon-fit', express.static(path.join(__dirname, 'node_modules/@xterm/addon-fit'), noStale));
 app.use('/vendor/addon-web-links', express.static(path.join(__dirname, 'node_modules/@xterm/addon-web-links'), noStale));
+app.use('/vendor/addon-webgl', express.static(path.join(__dirname, 'node_modules/@xterm/addon-webgl'), noStale));
 app.use(express.static(path.join(__dirname, 'public'), noStale));
 
 // ---------------------------------------------------------------- websockets
@@ -1091,6 +1099,7 @@ function attachTerminal(ws, req) {
   if (!tmuxSessions.has(target)) return fail('tmux session not found — launch it with cc');
   // sessions created before these options existed (or by older cc) get them on attach
   execFile(TMUX_BIN, ['set-option', '-t', target, 'mouse', 'on',
+    ';', 'set-option', '-t', target, 'status', 'off',
     ...TMUX_WHEEL_BINDINGS], { timeout: 3000 }, () => {});
   let pty;
   try { pty = require('node-pty'); } catch { return fail('node-pty unavailable'); }

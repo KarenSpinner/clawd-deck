@@ -34,22 +34,27 @@ if (localStorage.getItem('deckTheme') === 'dark') document.documentElement.class
 
   <aside id="sidebar">
     <nav class="tabs">
-      <button data-tab="todos" class="active">To-dos</button>
-      <button data-tab="artifacts">Artifacts</button>
+      <button data-tab="artifacts" class="active">Artifacts</button>
       <button data-tab="prs">PRs</button>
     </nav>
-    <div id="tab-todos" class="tab-panel active"></div>
-    <div id="tab-artifacts" class="tab-panel"></div>
+    <div id="tab-artifacts" class="tab-panel active"></div>
     <div id="tab-prs" class="tab-panel"></div>
   </aside>
 </main>
 
 <div id="detail" class="hidden">
   <header>
-    <button id="detail-close" title="Back to grid">←</button>
+    <button id="detail-close" title="Back to the session grid">← Back</button>
     <div id="detail-title"></div>
     <div id="detail-meta"></div>
-    <button id="convo-toggle" class="mini hidden">copy-paste view</button>
+    <div class="hd-actions">
+      <span id="term-font" class="hidden">
+        <button id="font-dec" class="mini" title="Smaller terminal text">A−</button>
+        <button id="font-inc" class="mini" title="Bigger terminal text">A+</button>
+      </span>
+      <button id="convo-toggle" class="mini hidden">copy-paste view</button>
+      <button id="detail-kill" class="mini kill hidden" title="End this session for real — closes its Claude process (and tmux window)">kill session</button>
+    </div>
   </header>
   <div id="detail-note" class="hidden"></div>
   <div class="panes">
@@ -58,6 +63,8 @@ if (localStorage.getItem('deckTheme') === 'dark') document.documentElement.class
       <div id="term-bar" class="hidden" title="Drag to scroll through the session">
         <div id="term-bar-thumb"></div>
       </div>
+      <button id="term-live" class="hidden" title="Jump back to the live end of the session">back to latest</button>
+      <div id="term-focus-hint" class="hidden">click the terminal to type</div>
     </div>
     <div id="convo-pane">
       <div class="pane-head">Conversation <span class="hint">· the copy buttons give you clean text, exactly as written</span></div>
@@ -98,6 +105,7 @@ if (localStorage.getItem('deckTheme') === 'dark') document.documentElement.class
 <script src="/vendor/xterm/lib/xterm.js"></script>
 <script src="/vendor/addon-fit/lib/addon-fit.js"></script>
 <script src="/vendor/addon-web-links/lib/addon-web-links.js"></script>
+<script src="/vendor/addon-webgl/lib/addon-webgl.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

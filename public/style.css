@@ -81,6 +81,7 @@ body {
   font-family: var(--sans); font-size: 13px; color: var(--text);
   background: var(--panel-2); border: 1px solid var(--border);
   border-radius: 6px; padding: 5px 10px; cursor: pointer;
+  min-height: 28px;
 }
 .ctl:hover { border-color: var(--blue); }
 .btn-new { background: var(--blue); border-color: var(--blue); color: #fff; font-weight: 600; }
@@ -97,7 +98,7 @@ body {
   box-shadow: 0 12px 40px rgba(60, 50, 30, .25);
   padding: 22px 24px; width: 440px; height: min(640px, 88vh);
   min-width: 400px; min-height: 430px; max-width: 94vw; max-height: 92vh;
-  display: flex; flex-direction: column;
+  display: flex; flex-direction: column; position: relative;
   resize: both; overflow: hidden; /* drag the bottom-right corner; size is remembered */
 }
 #ns-dialog h3, #ns-dialog label, #ns-err, #ns-dialog .ns-row { flex-shrink: 0; }
@@ -152,9 +153,21 @@ body {
 .ns-dir.recent { font-family: var(--mono); font-size: 12px; color: var(--muted); }
 .ns-dir.recent:hover { color: var(--blue); }
 #ns-err { color: var(--red); font-family: var(--sans); font-size: 13px; min-height: 18px; }
-.ns-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
-.mini.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+.ns-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; align-items: center; }
+.mini.primary {
+  background: var(--blue); border-color: var(--blue); color: #fff;
+  font-weight: 600; font-size: 13.5px; padding: 6px 18px;
+}
 .mini.primary:hover { color: #fff; background: #1a5fd0; }
+/* visible cue for the native drag-corner resize */
+#ns-dialog::after {
+  content: ''; position: absolute; right: 5px; bottom: 5px; width: 12px; height: 12px;
+  pointer-events: none;
+  background:
+    linear-gradient(135deg, transparent 50%, var(--border) 50%, var(--border) 60%,
+      transparent 60%, transparent 72%, var(--border) 72%, var(--border) 82%,
+      transparent 82%, transparent 94%, var(--border) 94%);
+}
 
 /* ---------- layout ---------- */
 main { display: flex; min-height: calc(100vh - 47px); }
@@ -186,19 +199,22 @@ body.no-sidebar #detail { right: 0; border-right: none; }
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 12px 14px;
-  display: flex; flex-direction: column; gap: 8px;
+  padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 10px;
   cursor: pointer;
   box-shadow: 0 1px 2px rgba(70, 58, 32, .05);
   transition: border-color .15s, box-shadow .15s;
+  /* uniform cards: every card the same height, actions pinned to the bottom,
+     so the eye finds the same thing in the same place on every card */
+  height: 270px; overflow: hidden;
 }
 .card:hover { border-color: var(--blue); box-shadow: 0 2px 6px rgba(70, 58, 32, .10); }
 .card.waiting { border-color: var(--amber); box-shadow: 0 0 0 1px var(--amber); }
 .card.ready { border-color: rgba(31, 111, 235, .45); }
 .card.ended { opacity: .55; }
 
-.card .row1 { display: flex; align-items: center; gap: 8px; }
-.dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.card .row1 { display: flex; align-items: flex-start; gap: 8px; flex-shrink: 0; }
+.dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; margin-top: 5px; }
 .dot.working { background: var(--green); animation: pulse 1.4s ease-in-out infinite; }
 .dot.idle { background: #c9c3b6; }
 .dot.waiting { background: var(--amber); animation: pulse .8s ease-in-out infinite; }
@@ -207,16 +223,15 @@ body.no-sidebar #detail { right: 0; border-right: none; }
 .dot.ended { background: #ddd8cc; }
 @keyframes pulse { 50% { opacity: .35; } }
 
-.card .name { font-weight: 600; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rename-btn {
-  background: none; border: none; color: var(--muted); cursor: pointer;
-  font-size: 12px; padding: 0 2px; opacity: 0; transition: opacity .15s; flex-shrink: 0;
+.card .name {
+  font-weight: 600; font-size: 16px; line-height: 1.3;
+  flex: 1; min-width: 0;
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
 }
-.card:hover .rename-btn { opacity: .8; }
-.rename-btn:hover { color: var(--text); }
 .dismiss-btn {
-  margin-left: auto; flex-shrink: 0; background: none; border: none;
-  color: var(--muted); font-size: 16px; line-height: 1; cursor: pointer; padding: 0 4px;
+  flex-shrink: 0; background: none; border: none;
+  color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer;
+  padding: 2px 8px; min-height: 24px;
 }
 .dismiss-btn:hover { color: var(--red); }
 .linklike {
@@ -225,7 +240,7 @@ body.no-sidebar #detail { right: 0; border-right: none; }
 }
 .linklike:hover { text-decoration: underline; }
 .badge {
-  margin-left: auto; flex-shrink: 0;
+  margin-left: auto; flex-shrink: 0; margin-top: 2px;
   font-family: var(--sans);
   font-size: 11px; font-weight: 700; letter-spacing: .4px;
   padding: 2px 8px; border-radius: 20px;
@@ -234,27 +249,40 @@ body.no-sidebar #detail { right: 0; border-right: none; }
 .badge.ready { background: var(--blue); color: #fff; }
 .badge.compacting { background: var(--violet); color: #fff; }
 .badge.starting { background: var(--panel-2); color: var(--violet); border: 1px solid var(--violet); }
+/* quiet states get a word too — from across the room, words beat colored dots */
+.badge.working { background: var(--panel-2); color: var(--green); border: 1px solid var(--border); }
+.badge.idle { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); }
+.badge.ended { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); }
 
 .card .subtitle {
-  color: var(--muted); font-size: 13.5px;
-  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  color: var(--muted); font-size: 13.5px; line-height: 1.5; flex-shrink: 0;
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
 }
-.card .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+/* one row, always: long chips truncate (full value in the tooltip) instead of
+   wrapping and pushing the bottom of the card out of its fixed height */
+.card .chips { display: flex; gap: 6px; flex-wrap: nowrap; flex-shrink: 0; min-width: 0; }
 .chip {
   font-family: var(--mono); font-size: 12px;
   background: var(--panel-2); border: 1px solid var(--border);
   padding: 1px 7px; border-radius: 6px; color: var(--muted);
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex-shrink: 1; min-width: 0;
 }
 .chip.branch { color: var(--violet); }
+/* the short identity chip stays whole; the long branch chip absorbs the squeeze */
+.chip.account { flex-shrink: 0; }
 
-.gauge { height: 6px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
+.gauge { height: 6px; background: var(--panel-2); border-radius: 4px; overflow: hidden; flex-shrink: 0; }
 .gauge > div { height: 100%; background: var(--blue); border-radius: 4px; transition: width .4s; }
 .gauge.hot > div { background: var(--amber); }
 .gauge.crit > div { background: var(--red); }
-.gauge-label { font-size: 12px; color: var(--muted); font-family: var(--mono); }
+.gauge-label {
+  font-size: 12px; color: var(--muted); font-family: var(--mono);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
 
-.card .todos { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+/* the one flexible block on a fixed-height card: shows what fits, hides the rest */
+.card .todos { display: flex; flex-direction: column; gap: 2px; font-size: 13px; overflow: hidden; min-height: 0; }
 .card .todos .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 .card .todos .t.completed { text-decoration: line-through; opacity: .55; }
 .card .todos .t.in_progress { color: var(--text); }
@@ -262,18 +290,35 @@ body.no-sidebar #detail { right: 0; border-right: none; }
 .card .todos .t.completed::before { content: "✓ "; }
 .card .todos .t.pending::before { content: "○ "; }
 
-.card .actions { display: flex; gap: 8px; align-items: center; margin-top: 2px; }
-.card .actions .spacer { flex: 1; }
+.card .foot {
+  margin-top: auto; flex-shrink: 0;
+  display: flex; flex-direction: column; gap: 8px; align-items: stretch;
+}
+.card .meta-row { display: flex; align-items: center; gap: 8px; min-height: 24px; }
+.card .meta-row .artifact-count { margin-right: -8px; }
+.card .actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.card .spacer { flex: 1; }
 .mini {
-  font-family: var(--sans); font-size: 12px; color: var(--muted);
+  font-family: var(--sans); font-size: 13px; color: var(--muted);
   background: var(--panel-2); border: 1px solid var(--border);
-  border-radius: 6px; padding: 3px 10px; cursor: pointer;
+  border-radius: 6px; padding: 4px 12px; cursor: pointer;
+  min-height: 28px; white-space: nowrap; flex-shrink: 0;
 }
 .mini:hover { color: var(--text); border-color: var(--blue); }
 .mini:disabled { opacity: .5; cursor: default; }
-.mini.kill:hover { color: var(--red); border-color: var(--red); }
-.nudge-note { font-size: 11.5px; color: var(--muted); font-style: italic; }
-.artifact-count { font-size: 12px; color: var(--muted); font-family: var(--sans); }
+/* kill reads as destructive at rest, not only on hover */
+.mini.kill { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, transparent); }
+.mini.kill:hover { color: #fff; background: var(--red); border-color: var(--red); }
+.nudge-note {
+  font-size: 11.5px; color: var(--muted); font-style: italic;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex-shrink: 1;
+}
+.artifact-count {
+  font-size: 12.5px; color: var(--muted); font-family: var(--sans);
+  background: none; border: 1px solid transparent; border-radius: 6px;
+  padding: 3px 8px; min-height: 24px; cursor: pointer;
+}
+.artifact-count:hover { color: var(--blue); border-color: var(--border); background: var(--panel-2); }
 
 /* ---------- sidebar ---------- */
 .tabs { display: flex; border-bottom: 1px solid var(--border); }
@@ -287,7 +332,13 @@ body.no-sidebar #detail { right: 0; border-right: none; }
 .tab-panel { display: none; overflow-y: auto; padding: 10px 12px; flex: 1; }
 .tab-panel.active { display: block; }
 
-.side-group { margin-bottom: 14px; }
+.side-group { margin-bottom: 14px; border-radius: 8px; }
+/* landing highlight when a card's file chip jumps you here */
+.side-group.flash { animation: flashbg 1.8s ease-out; }
+@keyframes flashbg {
+  from { background: color-mix(in srgb, var(--blue) 14%, transparent); }
+  to { background: transparent; }
+}
 .side-group h4 {
   margin: 0 0 5px; font-family: var(--sans); font-size: 11px; text-transform: uppercase;
   letter-spacing: .6px; color: var(--muted);
@@ -333,10 +384,15 @@ html.dark .pr-status.PENDING, html.dark .pr-status.EXPECTED, html.dark .counts .
 }
 #detail-close {
   background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
-  border-radius: 6px; font-size: 15px; padding: 3px 12px; cursor: pointer;
+  border-radius: 6px; font-family: var(--sans); font-size: 13.5px;
+  padding: 4px 14px; min-height: 28px; cursor: pointer; flex-shrink: 0;
 }
+#detail-close:hover { border-color: var(--blue); }
 #detail-title { font-weight: 600; font-size: 16px; }
 #detail-meta { color: var(--muted); font-size: 12px; font-family: var(--mono); }
+.hd-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+#term-font { display: inline-flex; gap: 4px; }
+#term-font .mini { padding: 4px 9px; }
 
 #detail-note {
   padding: 8px 16px; font-size: 13px; color: var(--muted);
@@ -348,12 +404,14 @@ html.dark .pr-status.PENDING, html.dark .pr-status.EXPECTED, html.dark .counts .
 /* the terminal stays dark on purpose — it's a terminal */
 /* padding lives on the pane, never on #term: the fit addon sizes the terminal
    from #term's box, and padding there makes it count columns that get clipped */
-#term-pane { flex: 1.2; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--term-bg); padding: 6px; position: relative; }
+/* right padding doubles as a gutter so the scrollbar never overlays the
+   terminal's last columns */
+#term-pane { flex: 1.2; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--term-bg); padding: 12px 26px 12px 12px; position: relative; }
 /* a real draggable scrollbar over the terminal, driven by tmux history.
    Always present while a terminal is connected — a full-length thumb means
    "nothing to scroll yet". Styled to match every other scrollbar on the page. */
 #term-bar {
-  position: absolute; top: 4px; bottom: 4px; right: 1px; width: 14px; z-index: 6;
+  position: absolute; top: 8px; bottom: 8px; right: 4px; width: 14px; z-index: 6;
   cursor: pointer;
 }
 #term-bar-thumb {
@@ -363,6 +421,23 @@ html.dark .pr-status.PENDING, html.dark .pr-status.EXPECTED, html.dark .counts .
 }
 #term-bar-thumb:hover, #term-bar.dragging #term-bar-thumb {
   background: var(--scroll-thumb-hover); cursor: grabbing;
+}
+/* jump back to the live end after scrolling into history — the one-click
+   return a mouse-only setup needs (dragging the thumb precisely is fiddly) */
+#term-live {
+  position: absolute; right: 34px; bottom: 16px; z-index: 7;
+  background: var(--blue); color: #fff; border: none; border-radius: 20px;
+  font-family: var(--sans); font-size: 13px; font-weight: 600;
+  padding: 7px 16px; min-height: 28px; cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .30);
+}
+#term-live:hover { background: #1a5fd0; }
+/* keystrokes only land in a focused terminal — say so instead of eating them */
+#term-focus-hint {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 14px; z-index: 7;
+  background: var(--panel); color: var(--muted); border: 1px solid var(--border);
+  border-radius: 20px; font-family: var(--sans); font-size: 12.5px;
+  padding: 5px 14px; pointer-events: none;
 }
 #term { flex: 1; min-height: 0; background: var(--term-bg); }
 #term .xterm { height: 100%; }
@@ -394,9 +469,10 @@ html.dark .pr-status.PENDING, html.dark .pr-status.EXPECTED, html.dark .counts .
 }
 .msg > .msg-head .copy-btn { margin-left: auto; }
 .copy-btn {
-  font-family: var(--sans); font-size: 11px;
+  font-family: var(--sans); font-size: 12px;
   background: var(--panel); color: var(--muted);
-  border: 1px solid var(--border); border-radius: 5px; padding: 2px 8px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 5px; padding: 3px 10px; cursor: pointer;
+  min-height: 24px;
 }
 .copy-btn:hover { color: var(--text); border-color: var(--blue); }
 .copy-btn.copied { color: var(--green); border-color: var(--green); }

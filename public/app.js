@@ -144,23 +144,10 @@ function renderGrid() {
 
     const row1 = document.createElement('div');
     row1.className = 'row1';
+    const fullName = s.name || s.sessionId.slice(0, 8);
+    const nameTip = fullName + (s.rawName && s.rawName !== s.name ? ' (session: ' + s.rawName + ')' : '');
     row1.innerHTML = `<span class="dot ${esc(s.status)}"></span>
-      <span class="name" title="${esc(s.rawName || '')}">${esc(s.name || s.sessionId.slice(0, 8))}</span>`;
-    const ren = document.createElement('button');
-    ren.className = 'rename-btn';
-    ren.textContent = '✎';
-    ren.title = 'Rename this card. The session itself keeps its own name.';
-    ren.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const v = window.prompt('Title for this session (leave empty to reset):', s.name || '');
-      if (v === null) return;
-      fetch(`/api/session/${s.sessionId}/title`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: v }),
-      });
-    });
-    row1.appendChild(ren);
+      <span class="name" title="${esc(nameTip)}">${esc(fullName)}</span>`;
     if (s.status === 'waiting') {
       const b = document.createElement('span');
       b.className = 'badge needs-you';
@@ -184,16 +171,27 @@ function renderGrid() {
       b.className = 'badge compacting';
       b.textContent = 'COMPACTING';
       row1.appendChild(b);
-    } else if (s.status === 'ended') {
-      const x = document.createElement('button');
-      x.className = 'dismiss-btn';
-      x.textContent = '×';
-      x.title = 'Remove this card';
-      x.addEventListener('click', (e) => {
-        e.stopPropagation();
-        fetch(`/api/session/${s.sessionId}/dismiss`, { method: 'POST' });
-      });
-      row1.appendChild(x);
+    } else {
+      // quiet states carry their word too: from a second monitor, "WORKING"
+      // vs "IDLE" reads instantly where a colored dot is a guess
+      const b = document.createElement('span');
+      b.className = 'badge ' + esc(s.status);
+      b.textContent = s.status.toUpperCase();
+      b.title = s.status === 'working' ? 'Mid-turn, no input needed'
+        : s.status === 'idle' ? 'Nothing happening right now'
+        : s.status === 'ended' ? 'This session is over' : '';
+      row1.appendChild(b);
+      if (s.status === 'ended') {
+        const x = document.createElement('button');
+        x.className = 'dismiss-btn';
+        x.textContent = '×';
+        x.title = 'Remove this card';
+        x.addEventListener('click', (e) => {
+          e.stopPropagation();
+          fetch(`/api/session/${s.sessionId}/dismiss`, { method: 'POST' });
+        });
+        row1.appendChild(x);
+      }
     }
     card.appendChild(row1);
 
@@ -204,10 +202,11 @@ function renderGrid() {
       card.appendChild(sub);
     }
 
+    // no branch chip here: branch names are long, rarely needed at a glance,
+    // and steal the copy's room — the session view's header still shows ⎇ branch
     const chips = document.createElement('div');
     chips.className = 'chips';
-    if (s.cwd) chips.innerHTML += `<span class="chip">${esc(shortPath(s.cwd))}</span>`;
-    if (s.gitBranch && s.gitBranch !== 'HEAD') chips.innerHTML += `<span class="chip branch">⎇ ${esc(s.gitBranch)}</span>`;
+    if (s.cwd) chips.innerHTML += `<span class="chip" title="${esc(s.cwd)}">${esc(shortPath(s.cwd))}</span>`;
     if ((state.profiles || []).length > 1 && s.accountLabel) {
       const hue = [...String(s.accountLabel)].reduce((a, c) => a + c.charCodeAt(0) * 37, 0) % 360;
       const tip = 'Account: ' + s.accountLabel + '. ' + (s.profileId === 'main'
@@ -219,19 +218,6 @@ function renderGrid() {
       chips.innerHTML += `<span class="chip account" title="${esc(tip)}" style="${tint}">@ ${esc(s.accountLabel)}</span>`;
     }
     card.appendChild(chips);
-
-    if (typeof s.contextPct === 'number') {
-      const g = document.createElement('div');
-      g.className = 'gauge' + (s.contextPct > 85 ? ' crit' : s.contextPct > 60 ? ' hot' : '');
-      g.innerHTML = `<div style="width:${Math.max(1, s.contextPct)}%"></div>`;
-      card.appendChild(g);
-      const gl = document.createElement('div');
-      gl.className = 'gauge-label';
-      gl.textContent = `context ${s.contextPct}%` +
-        (s.contextTokens ? ` · ${Math.round(s.contextTokens / 1000)}k` : '') +
-        (s.lastActivityAt ? ` · active ${ago(s.lastActivityAt)}` : '');
-      card.appendChild(gl);
-    }
 
     if (s.todos && s.todos.length) {
       const open = s.todos.filter(t => t.status !== 'completed');
@@ -255,14 +241,46 @@ function renderGrid() {
       card.appendChild(box);
     }
 
+    // card footer, pinned to the bottom edge of every card: the context gauge,
+    // one meta row (context numbers on the left, the files link on the right),
+    // then the buttons — so nothing floats and the copy above keeps its room
+    const foot = document.createElement('div');
+    foot.className = 'foot';
+    if (typeof s.contextPct === 'number') {
+      const g = document.createElement('div');
+      g.className = 'gauge' + (s.contextPct > 85 ? ' crit' : s.contextPct > 60 ? ' hot' : '');
+      g.innerHTML = `<div style="width:${Math.max(1, s.contextPct)}%"></div>`;
+      foot.appendChild(g);
+    }
+    if (typeof s.contextPct === 'number' || s.artifactCount) {
+      const meta = document.createElement('div');
+      meta.className = 'meta-row';
+      if (typeof s.contextPct === 'number') {
+        const gl = document.createElement('div');
+        gl.className = 'gauge-label';
+        gl.textContent = `context ${s.contextPct}%` +
+          (s.contextTokens ? ` · ${Math.round(s.contextTokens / 1000)}k` : '') +
+          (s.lastActivityAt ? ` · active ${ago(s.lastActivityAt)}` : '');
+        meta.appendChild(gl);
+      }
+      const msp = document.createElement('span');
+      msp.className = 'spacer';
+      meta.appendChild(msp);
+      if (s.artifactCount) {
+        const a = document.createElement('button');
+        a.className = 'artifact-count';
+        a.textContent = `📄 ${s.artifactCount} file${s.artifactCount === 1 ? '' : 's'}`;
+        a.title = 'Show what this session produced, in the Artifacts panel';
+        a.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openArtifactsFor(s.sessionId);
+        });
+        meta.appendChild(a);
+      }
+      foot.appendChild(meta);
+    }
     const actions = document.createElement('div');
     actions.className = 'actions';
-    if (s.artifactCount) {
-      const a = document.createElement('span');
-      a.className = 'artifact-count';
-      a.textContent = `📄 ${s.artifactCount}`;
-      actions.appendChild(a);
-    }
     if (s.nudge) {
       const n = document.createElement('span');
       n.className = 'nudge-note';
@@ -271,7 +289,26 @@ function renderGrid() {
       n.title = s.nudge.summary || '';
       actions.appendChild(n);
     }
-    actions.innerHTML += '<span class="spacer"></span>';
+    // never innerHTML+= here: re-parsing the row would strip the listeners
+    // off the buttons already appended (the file chip lost its click this way)
+    const spacer = document.createElement('span');
+    spacer.className = 'spacer';
+    actions.appendChild(spacer);
+    const ren = document.createElement('button');
+    ren.className = 'mini';
+    ren.textContent = 'rename';
+    ren.title = 'Rename this card. The session itself keeps its own name.';
+    ren.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const v = window.prompt('Title for this session (leave empty to reset):', s.name || '');
+      if (v === null) return;
+      fetch(`/api/session/${s.sessionId}/title`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: v }),
+      });
+    });
+    actions.appendChild(ren);
     const mem = document.createElement('button');
     mem.className = 'mini';
     mem.textContent = 'update memory';
@@ -298,7 +335,8 @@ function renderGrid() {
       });
       actions.appendChild(kill);
     }
-    card.appendChild(actions);
+    foot.appendChild(actions);
+    card.appendChild(foot);
 
     grid.appendChild(card);
   }
@@ -324,7 +362,7 @@ function renderGrid() {
 // Rebuild a sidebar panel only when its content actually changed, and keep the
 // user's scroll position when it does. Rebuilding on every snapshot emptied the
 // panel for a moment, which snapped its scroll back to the top.
-const sidebarKeys = { todos: null, artifacts: null, prs: null };
+const sidebarKeys = { artifacts: null, prs: null };
 
 function rebuildPanel(panel, keyName, key, build) {
   if (sidebarKeys[keyName] === key) return;
@@ -336,32 +374,35 @@ function rebuildPanel(panel, keyName, key, build) {
 }
 
 function renderSidebar() {
-  rebuildPanel($('#tab-todos'), 'todos',
-    JSON.stringify(state.sessions.map(s => [s.name, s.todos])), renderTodosPanel);
   rebuildPanel($('#tab-artifacts'), 'artifacts',
     JSON.stringify(state.sessions.map(s => [s.sessionId, s.name, s.artifactCount])), renderArtifactsPanel);
   rebuildPanel($('#tab-prs'), 'prs',
     JSON.stringify([state.prs.mine, state.prs.needsMe, state.prs.error]), renderPrsPanel);
 }
 
-function renderTodosPanel(tp) {
-  let anyTodos = false;
-  for (const s of state.sessions) {
-    if (!s.todos || !s.todos.length) continue;
-    anyTodos = true;
-    const g = document.createElement('div');
-    g.className = 'side-group';
-    g.innerHTML = `<h4>${esc(s.name || s.sessionId.slice(0, 8))}</h4>`;
-    for (const t of s.todos) {
-      const d = document.createElement('div');
-      d.className = 'side-item t ' + esc(t.status);
-      d.textContent = (t.status === 'completed' ? '✓ ' : t.status === 'in_progress' ? '▸ ' : '○ ') + t.content;
-      if (t.status === 'completed') d.style.opacity = '.5';
-      g.appendChild(d);
-    }
-    tp.appendChild(g);
+// Jump the sidebar to one session's artifacts: open the panel if hidden,
+// switch to the Artifacts tab, scroll to the session's group and flash it.
+// The intent is remembered briefly, because a live snapshot can rebuild the
+// panel right after the click and wipe a class set only once.
+let artifactsFlash = { id: null, at: 0 };
+function openArtifactsFor(sessionId) {
+  artifactsFlash = { id: sessionId, at: Date.now() };
+  if (document.body.classList.contains('no-sidebar')) {
+    localStorage.setItem('deckSidebar', 'open');
+    applySidebar();
   }
-  if (!anyTodos) tp.innerHTML = '<div class="empty">No to-dos yet. When a session writes itself a task list, it shows up here.</div>';
+  const tabBtn = document.querySelector('.tabs button[data-tab="artifacts"]');
+  if (tabBtn) tabBtn.click();
+  const jump = () => {
+    const g = document.querySelector(`#tab-artifacts .side-group[data-session-id="${sessionId}"]`);
+    if (!g) return;
+    g.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    g.classList.remove('flash');
+    void g.offsetWidth; // restart the animation on repeat clicks
+    g.classList.add('flash');
+  };
+  setTimeout(jump, 60);  // give the group's file list a beat to render
+  setTimeout(jump, 700); // and land again if a snapshot rebuilt the panel
 }
 
 function renderArtifactsPanel(ap) {
@@ -371,6 +412,10 @@ function renderArtifactsPanel(ap) {
     anyArt = true;
     const g = document.createElement('div');
     g.className = 'side-group';
+    g.dataset.sessionId = s.sessionId;
+    if (artifactsFlash.id === s.sessionId && Date.now() - artifactsFlash.at < 2500) {
+      g.classList.add('flash'); // a rebuild mid-flash keeps the landing highlight
+    }
     g.innerHTML = `<h4>${esc(s.name || s.sessionId.slice(0, 8))}</h4><div class="empty">loading…</div>`;
     ap.appendChild(g);
     fetch(`/api/session/${s.sessionId}/artifacts`).then(r => r.json()).then(art => {
@@ -435,6 +480,15 @@ function closeDetail() {
 $('#detail-close').addEventListener('click', closeDetail);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && detailSessionId) closeDetail(); });
 
+$('#detail-kill').addEventListener('click', () => {
+  const s = findDetailSession();
+  if (!s) return;
+  if (!window.confirm(`End the session "${s.name || s.sessionId.slice(0, 8)}"? ` +
+    'Its Claude process exits and anything unfinished there stops.')) return;
+  fetch(`/api/session/${s.sessionId}/kill`, { method: 'POST' });
+  closeDetail();
+});
+
 function findDetailSession() {
   return state.sessions.find(x => x.sessionId === detailSessionId) ||
     (pendingSession && pendingSession.sessionId === detailSessionId ? pendingSession : null);
@@ -447,6 +501,7 @@ function renderDetail(fresh) {
   $('#detail-meta').textContent =
     `${shortPath(s.cwd || '')}${s.gitBranch ? ' ⎇ ' + s.gitBranch : ''}` +
     `${typeof s.contextPct === 'number' ? ' · context ' + s.contextPct + '%' : ''} · ${s.status}`;
+  $('#detail-kill').classList.toggle('hidden', !(s.killable && s.status !== 'ended'));
   if (fresh) {
     // embedded sessions open terminal-first; the conversation pane waits until
     // asked for (or until the user's last choice says otherwise)
@@ -480,11 +535,13 @@ function applyConvoVisibility(s) {
   const btn = $('#convo-toggle');
   if (s.embeddable && s.tmuxTarget) {
     btn.classList.remove('hidden');
+    $('#term-font').classList.remove('hidden');
     btn.textContent = convoVisible ? 'hide copy-paste view' : 'copy-paste view';
     btn.title = 'The conversation as clean text, with a copy button on every message and code block';
     $('#convo-pane').classList.toggle('hidden', !convoVisible);
   } else {
     btn.classList.add('hidden');
+    $('#term-font').classList.add('hidden');
     $('#convo-pane').classList.remove('hidden');
   }
   // the terminal reclaims or cedes width; refit after layout settles — twice,
@@ -497,11 +554,19 @@ function applyConvoVisibility(s) {
 // claude's internal scroll position (the view lands on an empty region with
 // claude's own "Jump to bottom" hint showing), so follow up with a snap to live.
 let altSnapTimer = null;
-function sendTermResize() {
+let lastTermSize = { cols: 0, rows: 0 };
+function sendTermResize(force) {
   if (!term || !fitAddon) return;
   try {
     fitAddon.fit();
-    if (termWs && termWs.readyState === 1) termWs.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+    // only a real size change goes to tmux — and after tmux reflows, park the
+    // viewport on the live screen, or the session looks emptied (the text is
+    // fine, the view just isn't looking at it)
+    if (force === true || term.cols !== lastTermSize.cols || term.rows !== lastTermSize.rows) {
+      lastTermSize = { cols: term.cols, rows: term.rows };
+      if (termWs && termWs.readyState === 1) termWs.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+      term.scrollToBottom();
+    }
   } catch {}
   if (termScrollState.alt) {
     clearTimeout(altSnapTimer);
@@ -570,6 +635,25 @@ function loadConversation(sessionId, quiet) {
 
 let currentTermTarget = null;
 
+// ---- terminal font size ----
+// ⌘+ zooms the whole dashboard, so the terminal gets its own control,
+// remembered per browser.
+function termFontSize() {
+  const v = parseInt(localStorage.getItem('deckTermFont') || '14', 10);
+  return Math.min(22, Math.max(10, isNaN(v) ? 14 : v));
+}
+function bumpTermFont(delta) {
+  const v = Math.min(22, Math.max(10, termFontSize() + delta));
+  localStorage.setItem('deckTermFont', String(v));
+  if (term) {
+    term.options.fontSize = v;
+    sendTermResize();
+    term.focus();
+  }
+}
+$('#font-dec').addEventListener('click', () => bumpTermFont(-1));
+$('#font-inc').addEventListener('click', () => bumpTermFont(1));
+
 // ---- terminal scrollbar ----
 // The one scroll control, working like the copy-paste view's scrollbar:
 // drag the thumb (or click the track) to move through the session's history.
@@ -589,9 +673,13 @@ function renderTermBar() {
   const { history, pos, rows, alt } = termScrollState;
   if (!currentTermTarget) {
     bar.classList.add('hidden');
+    $('#term-live').classList.add('hidden');
     return;
   }
   bar.classList.remove('hidden');
+  // one click back to the live end whenever we're up in history
+  const scrolledUp = alt ? altPageEstimate > 0.01 : pos > 0;
+  $('#term-live').classList.toggle('hidden', !scrolledUp);
   const trackH = bar.clientHeight;
   if (alt) {
     // Fullscreen claude UI (profiles first used after May 2026, or /tui
@@ -612,6 +700,19 @@ function renderTermBar() {
   thumb.style.height = thumbH + 'px';
   thumb.style.top = (f * (trackH - thumbH)) + 'px';
 }
+
+$('#term-live').addEventListener('click', () => {
+  if (!termWs || termWs.readyState !== 1) return;
+  if (termScrollState.alt) {
+    termWs.send(JSON.stringify({ type: 'page', dir: 'bottom' }));
+    altPageEstimate = 0;
+  } else {
+    termWs.send(JSON.stringify({ type: 'scrollTo', pos: 0 }));
+    termScrollState.pos = 0; // optimistic; the 1s report corrects drift
+  }
+  renderTermBar();
+  if (term) term.focus();
+});
 
 (() => {
   const bar = $('#term-bar');
@@ -713,7 +814,7 @@ function openTermWs(s, note, isReconnect) {
   };
   termWs.onopen = () => {
     if (isReconnect) { note.classList.add('hidden'); deckLog('term reconnected: ' + s.tmuxTarget); }
-    sendTermResize();
+    sendTermResize(true); // fresh server-side pty starts at a default size — always tell it ours
   };
   termWs.onclose = () => {
     if (!term || currentTermTarget !== s.tmuxTarget) return; // deliberately closed
@@ -729,9 +830,12 @@ function disconnectTerm() {
   termScrollState = { history: 0, pos: 0, rows: 0, alt: 0 };
   altPageEstimate = 0;
   $('#term-bar').classList.add('hidden');
+  $('#term-live').classList.add('hidden');
+  $('#term-focus-hint').classList.add('hidden');
   clearTimeout(termWsRetry);
   if (termWs) { termWs.onclose = null; try { termWs.close(); } catch {} termWs = null; }
-  if (term) { term.dispose(); term = null; }
+  // an addon's dispose bug must never wedge the view half-closed
+  if (term) { try { term.dispose(); } catch {} term = null; }
   $('#term').innerHTML = '';
 }
 
@@ -749,11 +853,15 @@ function connectTerm(s) {
   note.classList.add('hidden');
   pane.classList.remove('hidden');
   currentTermTarget = s.tmuxTarget;
+  lastTermSize = { cols: 0, rows: 0 }; // new terminal: first fit always reports its size
   // the bar is on screen from the first paint; tmux's report refines it within a second
   termScrollState = { history: 0, pos: 0, rows: 0, alt: 0 };
   renderTermBar();
   term = new Terminal({
-    fontSize: 13,
+    fontSize: termFontSize(),
+    // lineHeight stays at 1: anything higher leaves gaps in the vertical
+    // box-drawing lines of claude's UI (xterm's glyphs don't stretch into
+    // line padding) — verified 2026-08-19, boxes render dashed at 1.2
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
     theme: TERM_THEMES[themeMode()],
     cursorBlink: true,
@@ -766,7 +874,26 @@ function connectTerm(s) {
   // real hyperlink escapes (OSC 8), should anything emit them, open the same way
   term.options.linkHandler = { activate: (e, uri) => window.open(uri, '_blank', 'noopener') };
   term.open($('#term'));
+  // GPU renderer for smooth repaints on busy sessions; anything goes wrong
+  // (no WebGL, context lost) and xterm silently falls back to the DOM renderer
+  if (window.WebglAddon) {
+    try {
+      const webgl = new WebglAddon.WebglAddon();
+      webgl.onContextLoss(() => webgl.dispose());
+      term.loadAddon(webgl);
+    } catch { /* DOM renderer it is */ }
+  }
   fitAddon.fit();
+  // keystrokes should land the moment the view opens, and the state should be
+  // visible: an unfocused terminal shows the "click to type" hint instead of
+  // silently eating input
+  term.focus();
+  const hint = $('#term-focus-hint');
+  hint.classList.add('hidden');
+  term.textarea.addEventListener('focus', () => hint.classList.add('hidden'));
+  term.textarea.addEventListener('blur', () => {
+    if (currentTermTarget && document.hasFocus()) hint.classList.remove('hidden');
+  });
 
   openTermWs(s, note, false);
   // refit once layout has fully settled (scrollbars, fonts) — a stale first
@@ -792,7 +919,7 @@ function applySidebar() {
   const closed = localStorage.getItem('deckSidebar') === 'closed';
   document.body.classList.toggle('no-sidebar', closed);
   const b = $('#sideToggle');
-  b.textContent = closed ? '◂ show panel' : 'hide panel ▸';
+  b.textContent = closed ? 'Show panel' : 'Hide panel';
   b.title = closed
     ? 'Bring back the to-dos / artifacts / PRs panel'
     : 'Hide the side panel so the cards get the full width';
@@ -854,7 +981,7 @@ function browseTo(p) {
     here.title = b.path;
     const list = $('#ns-browse-list');
     list.innerHTML = '';
-    if (b.parent) nsDirRow(list, '⬑ ..', b.parent, 'up');
+    if (b.parent) nsDirRow(list, '↑ up one level', b.parent, 'up');
     for (const name of b.dirs || []) {
       nsDirRow(list, '📁 ' + name, b.path + (b.path.endsWith('/') ? '' : '/') + name);
     }
