@@ -271,6 +271,7 @@ body.no-sidebar #detail { right: 0; border-right: none; }
 }
 .mini:hover { color: var(--text); border-color: var(--blue); }
 .mini:disabled { opacity: .5; cursor: default; }
+.mini.kill:hover { color: var(--red); border-color: var(--red); }
 .nudge-note { font-size: 11.5px; color: var(--muted); font-style: italic; }
 .artifact-count { font-size: 12px; color: var(--muted); font-family: var(--sans); }
 

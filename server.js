@@ -59,6 +59,13 @@ function expandHome(p) {
 const sessions = new Map();
 const hiddenSessions = new Set(); // our own headless nudge runs — never shown as cards
 const dismissed = new Set();      // ended cards the user closed; cleared if the session returns
+// sessionId -> 'interactive' | 'machinery'. Claude spawns sessions of its own —
+// background agents (kind "background", claimed from the bg-spare daemon pool)
+// and headless `claude -p` runs (reported as kind "interactive", but with no
+// controlling terminal). Both fire the same hooks as a real session, so hooks
+// alone would put them on the board as anonymous cards. The poller classifies
+// every id it sees; the snapshot keeps machinery off the board.
+const sessionKinds = new Map();
 let tmuxSessions = new Set(); // names of live tmux sessions ("cc-foo")
 let tmuxPanes = new Map();    // tmux session name -> { cmd, cwd } of its first pane
 let prs = { mine: [], needsMe: [], error: null, updatedAt: 0 };
@@ -107,6 +114,7 @@ function getSession(id) {
       compacting: false,
       startedAt: null,
       endedAt: null,
+      firstSeenAt: Date.now(),
       lastActivityAt: 0,
       todos: null,
       contextTokens: null,
@@ -170,6 +178,7 @@ function publicSession(s) {
     artifactCount: (s.artifacts.files.length + s.artifacts.urls.length) || 0,
     embeddable: !!(s.name && tmuxSessions.has('cc-' + s.name)),
     tmuxTarget: s.name && tmuxSessions.has('cc-' + s.name) ? 'cc-' + s.name : null,
+    killable: !!((s.name && tmuxSessions.has('cc-' + s.name)) || s.pid),
     nudge: s.nudge,
   };
 }
@@ -198,7 +207,7 @@ function syntheticTmuxSessions(claimed) {
       status: 'starting', waitingFor: null, notification: null, compacting: false,
       alive: true, startedAt: null, endedAt: null, lastActivityAt: 0,
       todos: null, contextTokens: null, contextPct: null, model: null,
-      artifactCount: 0, embeddable: true, tmuxTarget: t, nudge: null,
+      artifactCount: 0, embeddable: true, tmuxTarget: t, killable: true, nudge: null,
     });
   }
   return out;
@@ -218,7 +227,18 @@ try {
 function snapshot() {
   const list = [...sessions.values()]
     .filter(s => !hiddenSessions.has(s.sessionId) && !dismissed.has(s.sessionId))
-    .filter(s => s.alive || (s.endedAt && Date.now() - s.endedAt < ENDED_RETENTION_MS))
+    .filter(s => sessionKinds.get(s.sessionId) !== 'machinery')
+    .filter(s => {
+      if (sessionKinds.get(s.sessionId) === 'interactive') {
+        return s.alive || (s.endedAt && Date.now() - s.endedAt < ENDED_RETENTION_MS);
+      }
+      // hook-only, never confirmed as a real terminal session by the poller:
+      // a genuine session gets confirmed within ~3s, so anything still
+      // unconfirmed after a minute is a session from an unregistered profile
+      // (show it) — while short-lived spawned runs never make it to the board,
+      // and leave no "ended" corpse when they finish
+      return s.alive && Date.now() - s.firstSeenAt > 60000;
+    })
     .map(publicSession);
   // every tmux target any known session ever claimed, visible or not, so a
   // dismissed or just-ended session can't come back as a phantom "starting" card
@@ -353,36 +373,62 @@ function pollAgentsForProfile(prof) {
     let list;
     try { list = JSON.parse(stdout); } catch { return; }
     if (!Array.isArray(list)) return;
-    const seen = new Set();
-    for (const a of list) {
-      if (!a || !a.sessionId || a.kind !== 'interactive') continue;
-      seen.add(a.sessionId);
-      dismissed.delete(a.sessionId);
-      const s = getSession(a.sessionId);
-      s.profileId = prof.id;
-      const prevStatus = s.agentStatus;
-      s.alive = true;
-      s.endedAt = null;
-      if (s.hookStatus === 'ended') s.hookStatus = null;
-      s.name = a.name || s.name;
-      s.cwd = a.cwd || s.cwd;
-      s.pid = a.pid;
-      s.kind = a.kind;
-      s.startedAt = a.startedAt || s.startedAt;
-      s.agentStatus = (a.status === 'busy' || a.status === 'running') ? 'working' : (a.status || null);
-      s.waitingFor = a.status === 'waiting' ? (a.waitingFor || 'input') : null;
-      if (a.status !== prevStatus) s.agentStatusAt = Date.now();
-      attachSubtitle(s);
-    }
-    for (const s of sessions.values()) {
-      // only this profile's poller may declare its own sessions dead
-      if (s.alive && s.profileId === prof.id && s.agentStatus !== null && !seen.has(s.sessionId)) {
-        s.alive = false;
-        if (!s.endedAt) s.endedAt = Date.now();
+    // Headless `claude -p` runs report kind "interactive" too; the reliable tell
+    // is the controlling terminal. A session you can open and type into always
+    // sits on a pty (tmux allocates one even detached) — machinery shows "??".
+    const pids = list.filter(a => a && a.pid).map(a => a.pid);
+    execFile('ps', ['-o', 'pid=,tty=', '-p', pids.join(',') || '0'], { timeout: 5000 }, (psErr, psOut) => {
+      const ttys = new Map();
+      if (!psErr) {
+        for (const line of String(psOut || '').split('\n')) {
+          const m = line.trim().split(/\s+/);
+          if (m.length >= 2) ttys.set(Number(m[0]), m[1]);
+        }
       }
-    }
-    broadcast();
+      classifyAndIngest(prof, list, ttys);
+    });
   });
+}
+
+function classifyAndIngest(prof, list, ttys) {
+  const seen = new Set();
+  for (const a of list) {
+    if (!a || !a.sessionId) continue;
+    const tty = ttys.get(a.pid);
+    if (a.kind !== 'interactive' || tty === '??') {
+      sessionKinds.set(a.sessionId, 'machinery');
+      continue;
+    }
+    // no ps data (ps failed, or pid gone between calls): don't overwrite an
+    // earlier machinery verdict, but give an unknown id the benefit of the doubt
+    if (tty || !sessionKinds.has(a.sessionId)) sessionKinds.set(a.sessionId, 'interactive');
+    if (sessionKinds.get(a.sessionId) !== 'interactive') continue;
+    seen.add(a.sessionId);
+    dismissed.delete(a.sessionId);
+    const s = getSession(a.sessionId);
+    s.profileId = prof.id;
+    const prevStatus = s.agentStatus;
+    s.alive = true;
+    s.endedAt = null;
+    if (s.hookStatus === 'ended') s.hookStatus = null;
+    s.name = a.name || s.name;
+    s.cwd = a.cwd || s.cwd;
+    s.pid = a.pid;
+    s.kind = a.kind;
+    s.startedAt = a.startedAt || s.startedAt;
+    s.agentStatus = (a.status === 'busy' || a.status === 'running') ? 'working' : (a.status || null);
+    s.waitingFor = a.status === 'waiting' ? (a.waitingFor || 'input') : null;
+    if (a.status !== prevStatus) s.agentStatusAt = Date.now();
+    attachSubtitle(s);
+  }
+  for (const s of sessions.values()) {
+    // only this profile's poller may declare its own sessions dead
+    if (s.alive && s.profileId === prof.id && s.agentStatus !== null && !seen.has(s.sessionId)) {
+      s.alive = false;
+      if (!s.endedAt) s.endedAt = Date.now();
+    }
+  }
+  broadcast();
 }
 setInterval(pollAgents, 3000);
 pollAgents();
@@ -509,7 +555,7 @@ function readTail(file, bytes) {
 // Context gauge + branch/model from the tail of each live session's transcript.
 function refreshTranscriptTails() {
   for (const s of sessions.values()) {
-    if (!s.alive) continue;
+    if (!s.alive || sessionKinds.get(s.sessionId) === 'machinery') continue;
     const file = findTranscript(s);
     if (!file) continue;
     try {
@@ -616,7 +662,9 @@ function scanArtifacts(s) {
 }
 
 setInterval(() => {
-  for (const s of sessions.values()) if (s.alive) scanArtifacts(s);
+  for (const s of sessions.values()) {
+    if (s.alive && sessionKinds.get(s.sessionId) !== 'machinery') scanArtifacts(s);
+  }
   broadcast();
 }, 60000);
 
@@ -949,6 +997,42 @@ app.post('/api/new-session', (req, res) => {
       setTimeout(pollAgents, 700);
       res.json({ ok: true, name, target });
     });
+});
+
+// Actually end a session: kill its tmux session (which takes claude with it),
+// or SIGTERM the claude process for sessions running in a plain terminal tab.
+// The card is dismissed optimistically; if the process survives, the next
+// agents poll sees it alive and puts the card straight back.
+app.post('/api/session/:id/kill', (req, res) => {
+  const id = req.params.id;
+  const finish = () => {
+    broadcast();
+    setTimeout(pollAgents, 1200); // verify the kill took
+    res.json({ ok: true });
+  };
+  const killTmux = (target) => {
+    execFile(TMUX_BIN, ['kill-session', '-t', target], { timeout: 5000 }, () => {
+      tmuxSessions.delete(target);
+      tmuxPanes.delete(target);
+      finish();
+    });
+  };
+  if (id.startsWith('tmux:')) { // synthetic "starting" card
+    const target = id.slice(5);
+    if (!/^cc-[\w.-]+$/.test(target)) return res.status(400).json({ error: 'bad tmux target' });
+    return killTmux(target);
+  }
+  const s = sessions.get(id);
+  if (!s) return res.status(404).json({ error: 'unknown session' });
+  dismissed.add(id);
+  s.alive = false;
+  s.endedAt = Date.now();
+  s.hookStatus = 'ended';
+  s.hookStatusAt = Date.now();
+  const target = s.name && tmuxSessions.has('cc-' + s.name) ? 'cc-' + s.name : null;
+  if (target) return killTmux(target);
+  if (s.pid) { try { process.kill(s.pid, 'SIGTERM'); } catch {} }
+  finish();
 });
 
 app.post('/api/session/:id/dismiss', (req, res) => {

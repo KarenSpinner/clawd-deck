@@ -282,6 +282,22 @@ function renderGrid() {
       fetch(`/api/session/${s.sessionId}/memory-nudge`, { method: 'POST' });
     });
     actions.appendChild(mem);
+    if (s.killable && s.status !== 'ended') {
+      const kill = document.createElement('button');
+      kill.className = 'mini kill';
+      kill.textContent = 'kill';
+      kill.title = 'End this session for real — closes its Claude process (and tmux window). ' +
+        'Use × on the ended card afterwards to clear it.';
+      kill.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!window.confirm(`End the session "${s.name || s.sessionId.slice(0, 8)}"? ` +
+          'Its Claude process exits and anything unfinished there stops.')) return;
+        kill.disabled = true;
+        kill.textContent = 'killing…';
+        fetch(`/api/session/${s.sessionId}/kill`, { method: 'POST' });
+      });
+      actions.appendChild(kill);
+    }
     card.appendChild(actions);
 
     grid.appendChild(card);
