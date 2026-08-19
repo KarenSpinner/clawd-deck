@@ -25,4 +25,5 @@ fi
 exec tmux new-session -A -s "cc-$name" "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 claude -n \"$name\" $*" \
   \; set-option mouse on \
   \; bind-key -T root WheelUpPane if-shell -F -t = '#{alternate_on}' 'send-keys -M' 'copy-mode -e ; send-keys -M' \
-  \; bind-key -T root WheelDownPane if-shell -F -t = '#{alternate_on}' 'send-keys -M' ''
+  \; bind-key -T root WheelDownPane if-shell -F -t = '#{alternate_on}' 'send-keys -M' '' \
+  \; set-option -s 'terminal-features[42]' 'xterm-256color:hyperlinks'

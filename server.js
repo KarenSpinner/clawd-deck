@@ -35,6 +35,9 @@ const TMUX_WHEEL_BINDINGS = [
   // needs no scroll device and no scrollbar; Page Down / reaching the bottom returns to live
   ';', 'bind-key', '-T', 'root', 'PPage',
   'if-shell', '-F', '#{alternate_on}', 'send-keys PPage', 'copy-mode -eu',
+  // tmux strips OSC 8 hyperlinks (claude's linked text) unless the client
+  // terminal declares support — xterm.js supports them. Indexed set = idempotent.
+  ';', 'set-option', '-s', 'terminal-features[42]', 'xterm-256color:hyperlinks',
 ];
 const CLAUDE_BIN = [path.join(os.homedir(), '.local/bin/claude'), '/opt/homebrew/bin/claude', '/usr/local/bin/claude']
   .find(p => { try { return fs.existsSync(p); } catch { return false; } }) || 'claude';
