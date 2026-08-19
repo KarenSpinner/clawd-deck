@@ -2,7 +2,9 @@
 
 let state = { sessions: [], prs: { mine: [], needsMe: [] }, config: {} };
 let detailSessionId = null;
+let pendingSession = null; // a session we just launched, shown before any snapshot carries it
 let term = null, termWs = null, fitAddon = null;
+let sortMode = localStorage.getItem('deckSort') || 'attention'; // read before first render
 
 // ---------------------------------------------------------------- helpers
 
@@ -77,12 +79,50 @@ function renderMarkdown(text, container) {
   });
 }
 
+// ---------------------------------------------------------------- theme
+
+// Full palettes for the embedded terminal: xterm's default ANSI colors are
+// picked for a dark background and turn unreadable on white, so light mode
+// gets an explicit set (GitHub-light-ish).
+const TERM_THEMES = {
+  dark: {
+    background: '#000000', foreground: '#e6e6e6',
+    cursor: '#e6e6e6', cursorAccent: '#000000', selectionBackground: '#58a6ff55',
+    black: '#000000', red: '#ff7b72', green: '#3fb950', yellow: '#d29922',
+    blue: '#58a6ff', magenta: '#bc8cff', cyan: '#39c5cf', white: '#b1bac4',
+    brightBlack: '#6e7681', brightRed: '#ffa198', brightGreen: '#56d364', brightYellow: '#e3b341',
+    brightBlue: '#79c0ff', brightMagenta: '#d2a8ff', brightCyan: '#56d4dd', brightWhite: '#f0f6fc',
+  },
+  light: {
+    background: '#ffffff', foreground: '#24292f',
+    cursor: '#24292f', cursorAccent: '#ffffff', selectionBackground: '#b6d8fd',
+    black: '#24292f', red: '#cf222e', green: '#116329', yellow: '#4d2d00',
+    blue: '#0969da', magenta: '#8250df', cyan: '#1b7c83', white: '#6e7781',
+    brightBlack: '#57606a', brightRed: '#a40e26', brightGreen: '#1a7f37', brightYellow: '#633c01',
+    brightBlue: '#218bff', brightMagenta: '#a475f9', brightCyan: '#3192aa', brightWhite: '#8c959f',
+  },
+};
+
+function themeMode() {
+  return document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+}
+
+function applyTheme(mode) {
+  document.documentElement.classList.toggle('dark', mode === 'dark');
+  localStorage.setItem('deckTheme', mode);
+  const b = $('#themeToggle');
+  b.textContent = mode === 'dark' ? '☀ light' : '☾ dark';
+  if (term) term.options.theme = TERM_THEMES[mode]; // restyle a live terminal in place
+  if (state.sessions) renderGrid();                 // account chips tint per theme
+}
+$('#themeToggle').addEventListener('click', () => applyTheme(themeMode() === 'dark' ? 'light' : 'dark'));
+applyTheme(themeMode());
+
 // ---------------------------------------------------------------- grid
 
-let sortMode = localStorage.getItem('deckSort') || 'attention';
-
 function sortSessions(list) {
-  const rank = st => (st === 'waiting' ? 0 : st === 'ready' ? 1 : st === 'working' ? 2 : st === 'idle' ? 3 : 4);
+  const rank = st => (st === 'waiting' ? 0 : st === 'ready' ? 1 : st === 'working' ? 2 :
+    st === 'starting' ? 3 : st === 'idle' ? 4 : 5);
   const copy = [...list];
   if (sortMode === 'name') copy.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   else if (sortMode === 'activity') copy.sort((a, b) => (b.lastActivityAt || 0) - (a.lastActivityAt || 0));
@@ -133,6 +173,12 @@ function renderGrid() {
       b.textContent = 'READY';
       b.title = s.notification || 'Finished and waiting for your next prompt';
       row1.appendChild(b);
+    } else if (s.status === 'starting') {
+      const b = document.createElement('span');
+      b.className = 'badge starting';
+      b.textContent = 'STARTING';
+      b.title = 'Launched but not on the board yet. Click to watch it come up — if it is sitting on a sign-in or setup screen, you can type into it here.';
+      row1.appendChild(b);
     } else if (s.compacting) {
       const b = document.createElement('span');
       b.className = 'badge compacting';
@@ -164,11 +210,13 @@ function renderGrid() {
     if (s.gitBranch && s.gitBranch !== 'HEAD') chips.innerHTML += `<span class="chip branch">⎇ ${esc(s.gitBranch)}</span>`;
     if ((state.profiles || []).length > 1 && s.accountLabel) {
       const hue = [...String(s.accountLabel)].reduce((a, c) => a + c.charCodeAt(0) * 37, 0) % 360;
-      const tip = s.profileId === 'main'
+      const tip = 'Account: ' + s.accountLabel + '. ' + (s.profileId === 'main'
         ? 'Shared main login, currently ' + (s.account || 'unknown') + '. Running /login in any main session switches all of them.'
-        : (s.account || 'own login, separate from the main one');
-      chips.innerHTML += `<span class="chip account" title="${esc(tip)}"
-        style="color:hsl(${hue},55%,30%);border-color:hsl(${hue},40%,72%);background:hsl(${hue},50%,96%)">⚉ ${esc(s.accountLabel)}</span>`;
+        : (s.account || 'own login, separate from the main one'));
+      const tint = themeMode() === 'dark'
+        ? `color:hsl(${hue},65%,78%);border-color:hsl(${hue},35%,38%);background:hsl(${hue},40%,17%)`
+        : `color:hsl(${hue},55%,30%);border-color:hsl(${hue},40%,72%);background:hsl(${hue},50%,96%)`;
+      chips.innerHTML += `<span class="chip account" title="${esc(tip)}" style="${tint}">@ ${esc(s.accountLabel)}</span>`;
     }
     card.appendChild(chips);
 
@@ -371,8 +419,13 @@ function closeDetail() {
 $('#detail-close').addEventListener('click', closeDetail);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && detailSessionId) closeDetail(); });
 
+function findDetailSession() {
+  return state.sessions.find(x => x.sessionId === detailSessionId) ||
+    (pendingSession && pendingSession.sessionId === detailSessionId ? pendingSession : null);
+}
+
 function renderDetail(fresh) {
-  const s = state.sessions.find(x => x.sessionId === detailSessionId);
+  const s = findDetailSession();
   if (!s) return;
   $('#detail-title').textContent = s.name || s.sessionId.slice(0, 8);
   $('#detail-meta').textContent =
@@ -418,20 +471,38 @@ function applyConvoVisibility(s) {
     btn.classList.add('hidden');
     $('#convo-pane').classList.remove('hidden');
   }
-  // the terminal reclaims or cedes width; refit it after layout settles
-  setTimeout(() => {
-    if (!term || !fitAddon) return;
-    try {
-      fitAddon.fit();
-      if (termWs && termWs.readyState === 1) termWs.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
-    } catch {}
-  }, 60);
+  // the terminal reclaims or cedes width; refit after layout settles — twice,
+  // because a fit against mid-transition geometry leaves the terminal sized
+  // wrong (content not filling the pane) until something else nudges it
+  for (const delay of [60, 400]) setTimeout(sendTermResize, delay);
+}
+
+// Refit the terminal and tell tmux. On fullscreen sessions a resize scrambles
+// claude's internal scroll position (the view lands on an empty region with
+// claude's own "Jump to bottom" hint showing), so follow up with a snap to live.
+let altSnapTimer = null;
+function sendTermResize() {
+  if (!term || !fitAddon) return;
+  try {
+    fitAddon.fit();
+    if (termWs && termWs.readyState === 1) termWs.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+  } catch {}
+  if (termScrollState.alt) {
+    clearTimeout(altSnapTimer);
+    altSnapTimer = setTimeout(() => {
+      if (termScrollState.alt && termWs && termWs.readyState === 1) {
+        termWs.send(JSON.stringify({ type: 'page', dir: 'bottom' }));
+        altPageEstimate = 0;
+        renderTermBar();
+      }
+    }, 400);
+  }
 }
 
 $('#convo-toggle').addEventListener('click', () => {
   convoVisible = !convoVisible;
   localStorage.setItem('deckConvo', convoVisible ? 'show' : 'hide');
-  const s = state.sessions.find(x => x.sessionId === detailSessionId);
+  const s = findDetailSession();
   if (!s) return;
   applyConvoVisibility(s);
   if (convoVisible) {
@@ -444,6 +515,11 @@ let convoActivityAt = 0;
 
 function loadConversation(sessionId, quiet) {
   const convo = $('#convo');
+  if (String(sessionId).startsWith('tmux:')) {
+    // still starting — there is no transcript to show yet
+    convo.innerHTML = '<div class="empty">No conversation yet — the session is still starting. The terminal is live.</div>';
+    return;
+  }
   if (!quiet) convo.innerHTML = '<div class="empty">loading the conversation…</div>';
   fetch(`/api/session/${sessionId}/conversation`).then(r => r.json()).then(data => {
     if (sessionId !== detailSessionId) return;
@@ -476,8 +552,169 @@ function loadConversation(sessionId, quiet) {
 
 // ---------------------------------------------------------------- terminal
 
+let currentTermTarget = null;
+
+// ---- terminal scrollbar ----
+// The one scroll control, working like the copy-paste view's scrollbar:
+// drag the thumb (or click the track) to move through the session's history.
+// Position comes from tmux once a second; pos = lines above live, 0 = live.
+// The "back to live" pill appears only while scrolled up. The bar hides when
+// there is nothing to scroll: no history yet, or the session is showing a
+// full-screen view (a menu or picker owns the whole screen).
+let termScrollState = { history: 0, pos: 0, rows: 0, alt: 0 };
+// Rough position estimate for fullscreen (paging) sessions: claude doesn't
+// expose its scroll position, so we move the thumb by the pages we've sent.
+// 0 = live/bottom, 1 = as far up as we've estimated.
+let altPageEstimate = 0;
+
+function renderTermBar() {
+  const bar = $('#term-bar');
+  const thumb = $('#term-bar-thumb');
+  const { history, pos, rows, alt } = termScrollState;
+  if (!currentTermTarget) {
+    bar.classList.add('hidden');
+    return;
+  }
+  bar.classList.remove('hidden');
+  const trackH = bar.clientHeight;
+  if (alt) {
+    // Fullscreen claude UI (profiles first used after May 2026, or /tui
+    // fullscreen): the scroll position lives inside claude, so the bar pages
+    // rather than tracks — the thumb follows an estimate of where you are.
+    // Dragging to the very bottom of the track jumps back to live.
+    bar.title = 'Drag or click up / down to page through the conversation';
+    const thumbH = Math.max(26, Math.round(trackH / 3));
+    thumb.style.height = thumbH + 'px';
+    thumb.style.top = Math.round((1 - altPageEstimate) * (trackH - thumbH)) + 'px';
+    return;
+  }
+  const scrollable = history > 0;
+  bar.title = scrollable ? 'Drag to scroll through the session'
+    : 'Nothing to scroll yet — the whole session is on screen';
+  const thumbH = scrollable ? Math.max(26, trackH * rows / (history + rows)) : trackH;
+  const f = scrollable ? (history - pos) / history : 0; // 0 = top (or full), 1 = live
+  thumb.style.height = thumbH + 'px';
+  thumb.style.top = (f * (trackH - thumbH)) + 'px';
+}
+
+(() => {
+  const bar = $('#term-bar');
+  const thumb = $('#term-bar-thumb');
+  let lastSent = 0;
+  let altY = 0, altAccum = 0; // paging accumulator for full-screen sessions
+  const sendMsg = (obj) => {
+    if (termWs && termWs.readyState === 1) termWs.send(JSON.stringify(obj));
+    if (obj.type === 'page') {
+      if (obj.dir === 'up') altPageEstimate = Math.min(1, altPageEstimate + 0.08);
+      else if (obj.dir === 'down') altPageEstimate = Math.max(0, altPageEstimate - 0.08);
+      else if (obj.dir === 'bottom') altPageEstimate = 0;
+      renderTermBar();
+    }
+  };
+  const posFromY = (clientY) => {
+    const rect = bar.getBoundingClientRect();
+    const thumbH = thumb.offsetHeight;
+    const f = Math.max(0, Math.min((clientY - rect.top - thumbH / 2) / (rect.height - thumbH || 1), 1));
+    return Math.round(termScrollState.history * (1 - f));
+  };
+  const sendPos = (pos, force) => {
+    const now = Date.now();
+    if (!force && now - lastSent < 90) return;
+    lastSent = now;
+    termScrollState.pos = pos; // optimistic; the 1s report corrects drift
+    renderTermBar();
+    sendMsg({ type: 'scrollTo', pos });
+  };
+  const move = (e) => {
+    if (termScrollState.alt) {
+      // ~35px of drag = one page in claude's full-screen view
+      altAccum += e.clientY - altY;
+      altY = e.clientY;
+      while (altAccum <= -35) { sendMsg({ type: 'page', dir: 'up' }); altAccum += 35; }
+      while (altAccum >= 35) { sendMsg({ type: 'page', dir: 'down' }); altAccum -= 35; }
+      return;
+    }
+    sendPos(posFromY(e.clientY));
+  };
+  const up = (e) => {
+    bar.classList.remove('dragging');
+    document.removeEventListener('mousemove', move);
+    document.removeEventListener('mouseup', up);
+    if (termScrollState.alt) {
+      // released at the very bottom of the track = jump back to live
+      const r = bar.getBoundingClientRect();
+      if (e.clientY >= r.bottom - 14) sendMsg({ type: 'page', dir: 'bottom' });
+    } else {
+      sendPos(posFromY(e.clientY), true);
+    }
+  };
+  bar.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    deckLog('bar drag: target=' + currentTermTarget +
+      ' ws=' + (termWs ? termWs.readyState : 'none') +
+      ' hist=' + termScrollState.history + ' pos=' + termScrollState.pos +
+      ' alt=' + termScrollState.alt);
+    bar.classList.add('dragging');
+    if (termScrollState.alt) {
+      altY = e.clientY;
+      altAccum = 0;
+      const r = bar.getBoundingClientRect();
+      sendMsg({ type: 'page', dir: e.clientY < r.top + r.height / 2 ? 'up' : 'down' });
+    } else {
+      sendPos(posFromY(e.clientY), true);
+    }
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  });
+})();
+
+let termWsRetry = null;
+
+// Report client-side terminal events into the server log, so "it doesn't work
+// on my machine" turns into a line saying exactly which layer failed.
+function deckLog(msg) {
+  try {
+    fetch('/api/client-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ msg }),
+    }).catch(() => {});
+  } catch {}
+}
+
+// The terminal socket dies silently on server restarts and laptop sleep, and a
+// frozen idle screen looks exactly like a live one. While the session view is
+// open, keep reconnecting until it comes back.
+function openTermWs(s, note, isReconnect) {
+  if (!term) return;
+  if (isReconnect) term.reset(); // tmux repaints the whole screen on attach
+  termWs = new WebSocket(`ws://${location.host}/term?target=${encodeURIComponent(s.tmuxTarget)}`);
+  termWs.onmessage = (ev) => {
+    let m; try { m = JSON.parse(ev.data); } catch { return; }
+    if (m.type === 'data') term.write(m.data);
+    if (m.type === 'scroll') { termScrollState = m; renderTermBar(); }
+    if (m.type === 'error') { note.classList.remove('hidden'); note.textContent = m.message; }
+  };
+  termWs.onopen = () => {
+    if (isReconnect) { note.classList.add('hidden'); deckLog('term reconnected: ' + s.tmuxTarget); }
+    sendTermResize();
+  };
+  termWs.onclose = () => {
+    if (!term || currentTermTarget !== s.tmuxTarget) return; // deliberately closed
+    deckLog('term connection lost: ' + s.tmuxTarget + ' — reconnecting');
+    note.textContent = 'Terminal connection lost — reconnecting…';
+    note.classList.remove('hidden');
+    termWsRetry = setTimeout(() => openTermWs(s, note, true), 1500);
+  };
+}
+
 function disconnectTerm() {
-  if (termWs) { try { termWs.close(); } catch {} termWs = null; }
+  currentTermTarget = null;
+  termScrollState = { history: 0, pos: 0, rows: 0, alt: 0 };
+  altPageEstimate = 0;
+  $('#term-bar').classList.add('hidden');
+  clearTimeout(termWsRetry);
+  if (termWs) { termWs.onclose = null; try { termWs.close(); } catch {} termWs = null; }
   if (term) { term.dispose(); term = null; }
   $('#term').innerHTML = '';
 }
@@ -495,10 +732,14 @@ function connectTerm(s) {
   }
   note.classList.add('hidden');
   pane.classList.remove('hidden');
+  currentTermTarget = s.tmuxTarget;
+  // the bar is on screen from the first paint; tmux's report refines it within a second
+  termScrollState = { history: 0, pos: 0, rows: 0, alt: 0 };
+  renderTermBar();
   term = new Terminal({
     fontSize: 13,
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-    theme: { background: '#000000' },
+    theme: TERM_THEMES[themeMode()],
     cursorBlink: true,
     scrollback: 5000,
   });
@@ -507,21 +748,12 @@ function connectTerm(s) {
   term.open($('#term'));
   fitAddon.fit();
 
-  termWs = new WebSocket(`ws://${location.host}/term?target=${encodeURIComponent(s.tmuxTarget)}`);
-  termWs.onmessage = (ev) => {
-    let m; try { m = JSON.parse(ev.data); } catch { return; }
-    if (m.type === 'data') term.write(m.data);
-    if (m.type === 'error') { note.classList.remove('hidden'); note.textContent = m.message; }
-  };
-  termWs.onopen = () => {
-    termWs.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
-  };
+  openTermWs(s, note, false);
+  // refit once layout has fully settled (scrollbars, fonts) — a stale first
+  // measurement here is what clips the rightmost columns
+  setTimeout(sendTermResize, 200);
   term.onData(d => { if (termWs && termWs.readyState === 1) termWs.send(JSON.stringify({ type: 'input', data: d })); });
-  const ro = new ResizeObserver(() => {
-    if (!term) return;
-    fitAddon.fit();
-    if (termWs && termWs.readyState === 1) termWs.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
-  });
+  const ro = new ResizeObserver(sendTermResize);
   ro.observe($('#term'));
 }
 
@@ -537,7 +769,13 @@ document.querySelectorAll('.tabs button').forEach(btn => {
 });
 
 function applySidebar() {
-  document.body.classList.toggle('no-sidebar', localStorage.getItem('deckSidebar') === 'closed');
+  const closed = localStorage.getItem('deckSidebar') === 'closed';
+  document.body.classList.toggle('no-sidebar', closed);
+  const b = $('#sideToggle');
+  b.textContent = closed ? '◂ show panel' : 'hide panel ▸';
+  b.title = closed
+    ? 'Bring back the to-dos / artifacts / PRs panel'
+    : 'Hide the side panel so the cards get the full width';
 }
 $('#sideToggle').addEventListener('click', () => {
   localStorage.setItem('deckSidebar', localStorage.getItem('deckSidebar') === 'closed' ? 'open' : 'closed');
@@ -553,19 +791,124 @@ $('#sortSel').addEventListener('change', (e) => {
 });
 
 // ---- new session dialog ----
-let pendingOpen = null;
 const nsOverlay = $('#ns-overlay');
+let browseSeq = 0;     // ignore out-of-order browse responses while typing
+let recentPool = [];   // recent project dirs, captured when the dialog opens
+
+function nsDirRow(container, label, target, cls) {
+  const d = document.createElement('div');
+  d.className = 'ns-dir ' + (cls || '');
+  d.textContent = label;
+  d.title = target;
+  d.addEventListener('click', () => {
+    $('#ns-cwd').value = target;
+    browseTo(target);
+  });
+  container.appendChild(d);
+}
+
+// Recent projects, minus anything already on screen in the folder list below:
+// the folder being browsed and its direct children would show up twice.
+function renderRecent(currentPath) {
+  const rec = $('#ns-recent');
+  rec.innerHTML = '';
+  const norm = p => String(p).replace(/\/+$/, '');
+  const cur = norm(currentPath || '');
+  const shown = recentPool.map(norm).filter(n =>
+    n && n !== cur && n.slice(0, n.lastIndexOf('/')) !== cur).slice(0, 8);
+  $('#ns-recent-head').classList.toggle('hidden', !shown.length);
+  rec.classList.toggle('hidden', !shown.length);
+  $('#ns-divider').classList.toggle('hidden', !shown.length);
+  for (const d of shown) nsDirRow(rec, '🕘 ' + d, d, 'recent');
+}
+
+// A real folder browser: the list under the path input always shows the
+// subfolders of the nearest existing folder on the typed path. Click to
+// descend, ".." to go up, or pick a recent project. Full paths throughout.
+function browseTo(p) {
+  const seq = ++browseSeq;
+  fetch('/api/browse?path=' + encodeURIComponent(p || '')).then(r => r.json()).then(b => {
+    if (seq !== browseSeq) return;
+    const here = $('#ns-browse-here');
+    here.textContent = 'folders in ' + shortPath(b.path);
+    here.title = b.path;
+    const list = $('#ns-browse-list');
+    list.innerHTML = '';
+    if (b.parent) nsDirRow(list, '⬑ ..', b.parent, 'up');
+    for (const name of b.dirs || []) {
+      nsDirRow(list, '📁 ' + name, b.path + (b.path.endsWith('/') ? '' : '/') + name);
+    }
+    if (b.error) {
+      const e = document.createElement('div');
+      e.className = 'empty';
+      e.textContent = b.error;
+      list.appendChild(e);
+    } else if (!(b.dirs || []).length) {
+      const e = document.createElement('div');
+      e.className = 'empty';
+      e.textContent = 'no subfolders';
+      list.appendChild(e);
+    }
+    renderRecent(b.path);
+  }).catch(() => {});
+}
+
+let browseTimer = null;
+$('#ns-cwd').addEventListener('input', () => {
+  clearTimeout(browseTimer);
+  browseTimer = setTimeout(() => browseTo($('#ns-cwd').value.trim()), 250);
+});
+
+// ---- dialog sizing ----
+// The dialog resizes from its bottom-right corner (CSS resize); the divider
+// between the two lists portions their space. Both are remembered.
+function restoreNsLayout() {
+  const dlg = $('#ns-dialog');
+  try {
+    const size = JSON.parse(localStorage.getItem('deckNsSize') || 'null');
+    if (size && size.w && size.h) { dlg.style.width = size.w + 'px'; dlg.style.height = size.h + 'px'; }
+  } catch {}
+  const rh = parseInt(localStorage.getItem('deckNsRecentH') || '', 10);
+  if (rh) $('#ns-recent').style.height = rh + 'px';
+}
+
+function closeNsDialog() {
+  const dlg = $('#ns-dialog');
+  localStorage.setItem('deckNsSize', JSON.stringify({ w: dlg.offsetWidth, h: dlg.offsetHeight }));
+  const rec = $('#ns-recent');
+  if (rec.offsetHeight) localStorage.setItem('deckNsRecentH', String(rec.offsetHeight));
+  nsOverlay.classList.add('hidden');
+}
+
+(() => {
+  const div = $('#ns-divider');
+  const rec = $('#ns-recent');
+  let startY = 0, startH = 0;
+  const move = (e) => {
+    const room = $('#ns-browse').offsetHeight - 130; // keep the folder list usable
+    rec.style.height = Math.max(24, Math.min(startH + (e.clientY - startY), room)) + 'px';
+  };
+  const up = () => {
+    document.removeEventListener('mousemove', move);
+    document.removeEventListener('mouseup', up);
+  };
+  div.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    startY = e.clientY;
+    startH = rec.offsetHeight;
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  });
+})();
 
 $('#newSession').addEventListener('click', () => {
-  const dl = $('#ns-dirs');
-  dl.innerHTML = '';
+  const start = $('#ns-cwd').value.trim() ||
+    localStorage.getItem('deckLastDir') || state.home || '';
+  $('#ns-cwd').value = start;
   const dirs = new Set(state.recentDirs || []);
   for (const s of state.sessions) if (s.cwd) dirs.add(s.cwd);
-  for (const d of dirs) {
-    const o = document.createElement('option');
-    o.value = shortPath(d);
-    dl.appendChild(o);
-  }
+  recentPool = [...dirs];
+  browseTo(start); // renders the folder list and the filtered recent list
   const aw = $('#ns-acct-wrap');
   if ((state.profiles || []).length > 1) {
     aw.classList.remove('hidden');
@@ -574,19 +917,29 @@ $('#newSession').addEventListener('click', () => {
     for (const p of state.profiles) {
       const o = document.createElement('option');
       o.value = p.id;
-      o.textContent = p.label + ' — ' + (p.email || (p.hasToken ? 'own token login' : 'not set up yet'));
+      o.textContent = p.label + ' — ' + (p.email ||
+        (p.hasToken ? 'own token login' : 'no login yet — opens at the sign-in screen'));
       sel.appendChild(o);
     }
+    const lastProf = localStorage.getItem('deckLastProfile');
+    if (lastProf && state.profiles.some(p => p.id === lastProf)) sel.value = lastProf;
   } else {
     aw.classList.add('hidden');
   }
   $('#ns-err').textContent = '';
+  restoreNsLayout();
   nsOverlay.classList.remove('hidden');
   $('#ns-cwd').focus();
 });
 
-$('#ns-cancel').addEventListener('click', () => nsOverlay.classList.add('hidden'));
-nsOverlay.addEventListener('click', (e) => { if (e.target === nsOverlay) nsOverlay.classList.add('hidden'); });
+$('#ns-cancel').addEventListener('click', closeNsDialog);
+// close on a true backdrop click only: a resize or divider drag that ends
+// outside the dialog also registers as an overlay "click" — ignore those
+let nsPressOnOverlay = false;
+nsOverlay.addEventListener('mousedown', (e) => { nsPressOnOverlay = e.target === nsOverlay; });
+nsOverlay.addEventListener('click', (e) => {
+  if (e.target === nsOverlay && nsPressOnOverlay) closeNsDialog();
+});
 
 function startNewSession() {
   let name = $('#ns-name').value.trim();
@@ -594,23 +947,36 @@ function startNewSession() {
     const base = ($('#ns-cwd').value.trim().split('/').filter(Boolean).pop() || 'session');
     name = base + '-' + new Date().toTimeString().slice(0, 5).replace(':', '');
   }
+  const cwd = $('#ns-cwd').value.trim();
+  const profile = $('#ns-acct-wrap').classList.contains('hidden') ? 'main' : $('#ns-acct').value;
   fetch('/api/new-session', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      name,
-      cwd: $('#ns-cwd').value.trim(),
-      profile: $('#ns-acct-wrap').classList.contains('hidden') ? 'main' : $('#ns-acct').value,
-    }),
+    body: JSON.stringify({ name, cwd, profile }),
   }).then(r => r.json()).then(j => {
     if (j.error) { $('#ns-err').textContent = j.error; return; }
-    pendingOpen = j.name;
-    nsOverlay.classList.add('hidden');
+    localStorage.setItem('deckLastDir', cwd);
+    localStorage.setItem('deckLastProfile', profile);
+    closeNsDialog();
     $('#ns-name').value = '';
+    // Open the terminal immediately — don't wait for the session to register.
+    // If claude comes up at a login screen or any other prompt, you see it
+    // and can type into it right here.
+    pendingSession = {
+      sessionId: 'tmux:' + j.target,
+      name: j.name, rawName: j.name, cwd,
+      status: 'starting', alive: true,
+      embeddable: true, tmuxTarget: j.target,
+    };
+    openDetail(pendingSession.sessionId);
   }).catch(() => { $('#ns-err').textContent = 'could not reach the server'; });
 }
 $('#ns-go').addEventListener('click', startNewSession);
-$('#ns-dialog').addEventListener('keydown', (e) => { if (e.key === 'Enter') startNewSession(); });
+$('#ns-dialog').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  if (e.target.id === 'ns-cwd') { $('#ns-name').focus(); return; } // confirm folder, move on
+  startNewSession();
+});
 
 $('#autoNudge').addEventListener('change', (e) => {
   fetch('/api/config', {
@@ -625,16 +991,37 @@ $('#autoNudge').addEventListener('change', (e) => {
 let deepLinked = false;
 let liveSnapshots = false;
 
+let pageAppVersion = null;
+
 function applySnapshot(m) {
+  // the dashboard code on disk moved on (server sends the UI files' version):
+  // pick up the new page instead of silently running the old one
+  if (m.appVersion) {
+    if (pageAppVersion === null) pageAppVersion = m.appVersion;
+    else if (pageAppVersion !== m.appVersion) { location.reload(); return; }
+  }
   state = m;
+  // once a snapshot carries the session we launched (as its synthetic "starting"
+  // card or the real registered session), the local placeholder has done its job
+  if (pendingSession && state.sessions.some(x =>
+      x.sessionId === pendingSession.sessionId || x.tmuxTarget === pendingSession.tmuxTarget)) {
+    pendingSession = null;
+  }
+  // the open detail view follows its tmux pane: when the "starting" card gives
+  // way to the real registered session, swap ids without touching the terminal
+  if (detailSessionId && String(detailSessionId).startsWith('tmux:') &&
+      !state.sessions.some(x => x.sessionId === detailSessionId)) {
+    const target = String(detailSessionId).slice(5);
+    const real = state.sessions.find(x => x.tmuxTarget === target);
+    if (real) {
+      detailSessionId = real.sessionId;
+      applyConvoVisibility(real);
+      if (convoVisible) loadConversation(real.sessionId);
+    }
+  }
   renderGrid();
   renderSidebar();
   if (detailSessionId) renderDetail(false);
-  // a session just started from the dashboard: open it as soon as it appears
-  if (pendingOpen) {
-    const s = state.sessions.find(x => x.rawName === pendingOpen);
-    if (s) { pendingOpen = null; openDetail(s.sessionId); }
-  }
   // ?session=<id> deep-links straight into a session's detail view
   if (!deepLinked) {
     deepLinked = true;

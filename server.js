@@ -21,6 +21,21 @@ const PORT = 4839;
 // LaunchAgents get a minimal PATH, so resolve binaries explicitly
 const TMUX_BIN = ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux']
   .find(p => { try { return fs.existsSync(p); } catch { return false; } }) || 'tmux';
+// Wheel-up always scrolls tmux history (readable, no selection highlight) instead
+// of being passed to claude, which treats it as prompt-history cycling. Wheel-down
+// while live is swallowed for the same reason; inside the history view it scrolls
+// down and drops back to live at the bottom. True full-screen apps
+// (alternate_on) still get their mouse events. Server-wide, idempotent.
+const TMUX_WHEEL_BINDINGS = [
+  ';', 'bind-key', '-T', 'root', 'WheelUpPane',
+  'if-shell', '-F', '-t', '=', '#{alternate_on}', 'send-keys -M', 'copy-mode -e ; send-keys -M',
+  ';', 'bind-key', '-T', 'root', 'WheelDownPane',
+  'if-shell', '-F', '-t', '=', '#{alternate_on}', 'send-keys -M', '',
+  // Page Up scrolls history too (fn+↑ on a Mac keyboard) — a keyboard path that
+  // needs no scroll device and no scrollbar; Page Down / reaching the bottom returns to live
+  ';', 'bind-key', '-T', 'root', 'PPage',
+  'if-shell', '-F', '#{alternate_on}', 'send-keys PPage', 'copy-mode -eu',
+];
 const CLAUDE_BIN = [path.join(os.homedir(), '.local/bin/claude'), '/opt/homebrew/bin/claude', '/usr/local/bin/claude']
   .find(p => { try { return fs.existsSync(p); } catch { return false; } }) || 'claude';
 const CONTEXT_WINDOW = 1_000_000; // claude-fable-5[1m]
@@ -28,7 +43,12 @@ const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
 const HISTORY_FILE = path.join(CLAUDE_DIR, 'history.jsonl');
 const CONFIG_FILE = path.join(__dirname, 'config.json');
+const PROFILES_FILE = path.join(__dirname, 'profiles.json');
 const ENDED_RETENTION_MS = 60 * 60 * 1000; // keep ended sessions on the board 1h
+
+function expandHome(p) {
+  return String(p).replace(/^~(?=\/|$)/, os.homedir());
+}
 
 // ---------------------------------------------------------------- state
 
@@ -37,13 +57,30 @@ const sessions = new Map();
 const hiddenSessions = new Set(); // our own headless nudge runs — never shown as cards
 const dismissed = new Set();      // ended cards the user closed; cleared if the session returns
 let tmuxSessions = new Set(); // names of live tmux sessions ("cc-foo")
+let tmuxPanes = new Map();    // tmux session name -> { cmd, cwd } of its first pane
 let prs = { mine: [], needsMe: [], error: null, updatedAt: 0 };
 let config = { autoNudge: false, titles: {} };
 try { config = { ...config, ...JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) }; } catch {}
 config.titles = config.titles || {}; // sessionId -> { custom?, generated? }
 
 function saveConfig() {
-  try { fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2)); } catch {}
+  // config.json is machine-written cache (titles, toggles). Account profiles live
+  // in profiles.json, which is yours to edit and which this server never writes —
+  // strip any legacy copies so a save can't resurrect them.
+  const { profiles, mainLabel, ...machine } = config;
+  try { fs.writeFileSync(CONFIG_FILE, JSON.stringify(machine, null, 2)); } catch {}
+}
+
+// One-time migration: profiles used to live in config.json, where every cached
+// title write clobbered hand edits. Move them to their own file once.
+if (!fs.existsSync(PROFILES_FILE) && (config.profiles || config.mainLabel)) {
+  try {
+    fs.writeFileSync(PROFILES_FILE, JSON.stringify({
+      main: { label: config.mainLabel || 'main' },
+      profiles: (config.profiles || []).map(p => ({ id: p.id, label: p.label || p.id, dir: p.dir })),
+    }, null, 2));
+    saveConfig();
+  } catch {}
 }
 
 function getSession(id) {
@@ -139,18 +176,62 @@ function publicSession(s) {
 const wsClients = new Set();
 let broadcastTimer = null;
 
+// A cc-* tmux pane running claude with no registered agent session is a session
+// mid-startup — or parked on an interactive screen (login, trust prompt, wizard).
+// Surface it as a "starting" card so it's a thing you can open and type into,
+// never an invisible window that "never opened".
+function syntheticTmuxSessions(claimed) {
+  const out = [];
+  for (const [t, info] of tmuxPanes) {
+    if (!t.startsWith('cc-') || claimed.has(t)) continue;
+    // claude's process name is its version-numbered binary ("2.1.234"); a pane
+    // showing a plain shell means claude exited there — not a session anymore
+    if (!/^(claude|node|\d+\.\d+\.\S+)$/.test((info && info.cmd) || '')) continue;
+    out.push({
+      sessionId: 'tmux:' + t,
+      name: t.slice(3), rawName: t.slice(3),
+      account: null, accountLabel: null, profileId: null,
+      subtitle: null, cwd: (info && info.cwd) || null, gitBranch: null,
+      status: 'starting', waitingFor: null, notification: null, compacting: false,
+      alive: true, startedAt: null, endedAt: null, lastActivityAt: 0,
+      todos: null, contextTokens: null, contextPct: null, model: null,
+      artifactCount: 0, embeddable: true, tmuxTarget: t, nudge: null,
+    });
+  }
+  return out;
+}
+
+// Fingerprint of the UI files, sent with every snapshot: a parked dashboard
+// tab reloads itself when the code on disk moves on, instead of silently
+// running last week's page.
+let staticVersion = '0';
+try {
+  const pub = path.join(__dirname, 'public');
+  staticVersion = String(Math.max(...fs.readdirSync(pub).map(f => {
+    try { return fs.statSync(path.join(pub, f)).mtimeMs; } catch { return 0; }
+  })));
+} catch {}
+
 function snapshot() {
   const list = [...sessions.values()]
     .filter(s => !hiddenSessions.has(s.sessionId) && !dismissed.has(s.sessionId))
     .filter(s => s.alive || (s.endedAt && Date.now() - s.endedAt < ENDED_RETENTION_MS))
-    .map(publicSession)
-    .sort((a, b) => {
-      const rank = st => (st === 'waiting' ? 0 : st === 'ready' ? 1 : st === 'working' ? 2 : st === 'idle' ? 3 : 4);
-      return rank(a.status) - rank(b.status) || (b.lastActivityAt || 0) - (a.lastActivityAt || 0);
-    });
+    .map(publicSession);
+  // every tmux target any known session ever claimed, visible or not, so a
+  // dismissed or just-ended session can't come back as a phantom "starting" card
+  const claimed = new Set();
+  for (const s of sessions.values()) if (s.name) claimed.add('cc-' + s.name);
+  list.push(...syntheticTmuxSessions(claimed));
+  list.sort((a, b) => {
+    const rank = st => (st === 'waiting' ? 0 : st === 'ready' ? 1 : st === 'working' ? 2 :
+      st === 'starting' ? 3 : st === 'idle' ? 4 : 5);
+    return rank(a.status) - rank(b.status) || (b.lastActivityAt || 0) - (a.lastActivityAt || 0);
+  });
   return {
     type: 'snapshot', sessions: list, prs, config,
+    appVersion: staticVersion,
     recentDirs: cachedRecentDirs,
+    home: os.homedir(),
     profiles: profilesCache.map(p => ({ id: p.id, label: p.label, email: p.email, hasToken: !!p.token })),
     now: Date.now(),
   };
@@ -169,20 +250,53 @@ function broadcast() {
 
 // ---- account profiles ----
 // Each Claude account gets its own config directory (CLAUDE_CONFIG_DIR).
-// 'main' is the default ~/.claude login; extras come from config.json:
-//   "profiles": [{ "id": "personal", "dir": "/Users/you/.claude-profiles/personal" }]
+// 'main' is the default ~/.claude login; extras come from profiles.json:
+//   { "main": { "label": "home" },
+//     "profiles": [{ "id": "work", "label": "work", "dir": "~/.claude-profiles/work" }] }
+// That file is yours to edit; the server watches it and never writes it.
 function readAccountEmail(dir) {
   const f = dir ? path.join(dir, '.claude.json') : path.join(os.homedir(), '.claude.json');
   try { return (JSON.parse(fs.readFileSync(f, 'utf8')).oauthAccount || {}).emailAddress || null; }
   catch { return null; }
 }
 
-let profilesCache = [{ id: 'main', dir: null, email: null, label: 'work', token: null }];
+// A brand-new config dir drops its first session into the first-run wizard
+// (theme picker) — invisible inside a detached tmux pane, which reads as "the
+// window never opened". Seed the dir with the main login's onboarding state so
+// a fresh profile boots straight to the login screen instead.
+function seedProfileDir(dir) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const f = path.join(dir, '.claude.json');
+    if (fs.existsSync(f)) return;
+    let main = {};
+    try { main = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude.json'), 'utf8')); } catch {}
+    const seed = { hasCompletedOnboarding: true };
+    for (const k of ['theme', 'lastOnboardingVersion', 'installMethod', 'autoUpdates']) {
+      if (main[k] !== undefined) seed[k] = main[k];
+    }
+    fs.writeFileSync(f, JSON.stringify(seed, null, 2));
+    // a brand-new profile counts as a first-use-after-May-2026 account, which
+    // defaults to the fullscreen renderer — no terminal scrollback. Opt out so
+    // sessions scroll like a normal terminal (see docs: fullscreen rendering).
+    const sf = path.join(dir, 'settings.json');
+    if (!fs.existsSync(sf)) {
+      fs.writeFileSync(sf, JSON.stringify(
+        { env: { CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN: '1' } }, null, 2));
+    }
+  } catch {}
+}
+
+let profilesCache = [{ id: 'main', dir: null, email: null, label: 'main', token: null }];
 function refreshProfiles() {
-  const profs = [{ id: 'main', dir: null, label: config.mainLabel || 'work' },
-    ...(config.profiles || []).map(p => ({ ...p }))];
+  let spec = {};
+  try { spec = JSON.parse(fs.readFileSync(PROFILES_FILE, 'utf8')); } catch {}
+  const profs = [{ id: 'main', dir: null, label: (spec.main && spec.main.label) || 'main' },
+    ...(spec.profiles || [])
+      .filter(p => p && p.id && p.id !== 'main' && p.dir)
+      .map(p => ({ id: p.id, label: p.label || p.id, dir: expandHome(p.dir) }))];
   for (const p of profs) {
-    p.label = p.label || p.id;
+    if (p.dir) seedProfileDir(p.dir);
     p.email = readAccountEmail(p.dir);
     // a long-lived token (from `claude setup-token`) saved as {dir}/token pins
     // this profile to its own account, independent of the shared macOS keychain
@@ -197,7 +311,8 @@ function refreshProfiles() {
   profilesCache = profs;
 }
 refreshProfiles();
-setInterval(refreshProfiles, 60000);
+setInterval(refreshProfiles, 15000); // picks up a just-completed login quickly
+fs.watchFile(PROFILES_FILE, { interval: 3000 }, () => { refreshProfiles(); broadcast(); });
 
 function profileEnv(prof) {
   const env = { ...process.env };
@@ -212,13 +327,25 @@ function profileEnvFor(s) {
 
 function pollAgents() {
   for (const prof of profilesCache) pollAgentsForProfile(prof);
-  execFile(TMUX_BIN, ['list-sessions', '-F', '#{session_name}'], { timeout: 5000 }, (err, stdout) => {
-    tmuxSessions = new Set(err ? [] : stdout.split('\n').filter(Boolean));
-  });
+  execFile(TMUX_BIN, ['list-panes', '-a', '-F', '#{session_name}\t#{pane_current_command}\t#{pane_current_path}'],
+    { timeout: 5000 }, (err, stdout) => {
+      const names = new Set();
+      const panes = new Map();
+      if (!err) {
+        for (const line of stdout.split('\n')) {
+          if (!line.trim()) continue;
+          const [name, cmd, cwd] = line.split('\t');
+          names.add(name);
+          if (!panes.has(name)) panes.set(name, { cmd, cwd });
+        }
+      }
+      tmuxSessions = names;
+      tmuxPanes = panes;
+    });
 }
 
 function pollAgentsForProfile(prof) {
-  execFile('claude', ['agents', '--json'], { timeout: 10000, env: profileEnv(prof) }, (err, stdout) => {
+  execFile(CLAUDE_BIN, ['agents', '--json'], { timeout: 10000, env: profileEnv(prof) }, (err, stdout) => {
     if (err) return; // claude busy, missing, or profile not logged in — keep last known state
     let list;
     try { list = JSON.parse(stdout); } catch { return; }
@@ -289,7 +416,7 @@ function attachSubtitle(s) {
 
 function historyFiles() {
   const files = [HISTORY_FILE];
-  for (const p of (config.profiles || [])) if (p.dir) files.push(path.join(p.dir, 'history.jsonl'));
+  for (const p of profilesCache) if (p.dir) files.push(path.join(p.dir, 'history.jsonl'));
   return files;
 }
 
@@ -340,7 +467,7 @@ ingestHistory();
 let projectDirs = [];
 function refreshProjectDirs() {
   const roots = [PROJECTS_DIR];
-  for (const p of (config.profiles || [])) if (p.dir) roots.push(path.join(p.dir, 'projects'));
+  for (const p of profilesCache) if (p.dir) roots.push(path.join(p.dir, 'projects'));
   const dirs = [];
   for (const root of roots) {
     try {
@@ -531,7 +658,7 @@ function pumpTitleQueue() {
   const prompt =
     'Write a short descriptive title, 3 to 6 plain words, for a work session that opened with the request below. ' +
     'Reply with the title only — no quotes, no trailing punctuation.\n\nRequest: ' + s.subtitle;
-  const child = spawn('claude', ['-p', '--model', 'haiku', '--session-id', hid, prompt],
+  const child = spawn(CLAUDE_BIN, ['-p', '--model', 'haiku', '--session-id', hid, prompt],
     { cwd: os.homedir(), timeout: 60000, env: profileEnvFor(s) });
   let out = '';
   let finished = false;
@@ -625,7 +752,7 @@ function runNudge(s) {
   broadcast();
   const nudgeId = randomUUID();
   hiddenSessions.add(nudgeId);
-  const child = spawn('claude',
+  const child = spawn(CLAUDE_BIN,
     ['-p', '--session-id', nudgeId, '--permission-mode', 'acceptEdits', prompt],
     { cwd, timeout: 5 * 60 * 1000, env: profileEnvFor(s) });
   let out = '';
@@ -755,6 +882,39 @@ app.post('/api/session/:id/title', (req, res) => {
   res.json({ ok: true, title: title || null });
 });
 
+// List the subfolders of a directory for the New session folder picker.
+app.get('/api/browse', (req, res) => {
+  let p = expandHome(String(req.query.path || '').trim());
+  if (!p) p = os.homedir();
+  p = path.resolve(p);
+  try {
+    if (!fs.statSync(p).isDirectory()) p = path.dirname(p);
+  } catch {
+    // walk up to the nearest folder that exists, so typing a path browses as you go
+    let up = path.dirname(p);
+    while (up !== path.dirname(up) && !fs.existsSync(up)) up = path.dirname(up);
+    p = fs.existsSync(up) ? up : os.homedir();
+  }
+  let dirs = [];
+  let error = null;
+  try {
+    dirs = fs.readdirSync(p, { withFileTypes: true })
+      .filter(d => (d.isDirectory() || d.isSymbolicLink()) && !d.name.startsWith('.') && d.name !== 'node_modules')
+      .filter(d => { try { return fs.statSync(path.join(p, d.name)).isDirectory(); } catch { return false; } })
+      .map(d => d.name)
+      .sort((a, b) => a.localeCompare(b))
+      .slice(0, 400);
+  } catch (e) { error = 'cannot read this folder'; }
+  res.json({ path: p, parent: p === path.dirname(p) ? null : path.dirname(p), dirs, error });
+});
+
+// Client-side diagnostics land in this server's log, so a "doesn't work on my
+// machine" report comes with the failing layer named.
+app.post('/api/client-log', (req, res) => {
+  console.log('[client]', String((req.body || {}).msg || '').slice(0, 300));
+  res.json({ ok: true });
+});
+
 // Start a new Claude session inside tmux, embeddable from the browser.
 app.post('/api/new-session', (req, res) => {
   const name = String((req.body || {}).name || '').trim()
@@ -767,13 +927,22 @@ app.post('/api/new-session', (req, res) => {
   if (tmuxSessions.has(target)) return res.status(400).json({ error: 'a session named ' + name + ' is already running' });
   const prof = profilesCache.find(p => p.id === String((req.body || {}).profile || 'main')) || profilesCache[0];
   const args = ['new-session', '-d', '-s', target, '-c', cwd];
+  // classic renderer for every launched session, whoever's machine this is:
+  // claude's fullscreen default (accounts first used after May 2026) leaves the
+  // terminal with no scrollback, which kills scrolling in the embedded view
+  args.push('-e', 'CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1');
   if (prof.dir) args.push('-e', 'CLAUDE_CONFIG_DIR=' + prof.dir);
   if (prof.token) args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=' + prof.token);
   args.push(CLAUDE_BIN, '-n', name);
+  // mouse on: wheel scrolling reaches tmux (copy-mode history) or the app,
+  // so the embedded terminal can scroll instead of being a fixed screen
+  args.push(';', 'set-option', '-t', target, 'mouse', 'on', ...TMUX_WHEEL_BINDINGS);
   execFile(TMUX_BIN, args,
     { timeout: 10000 }, (err) => {
       if (err) return res.status(500).json({ error: String(err.message || err).split('\n')[0] });
       tmuxSessions.add(target);
+      tmuxPanes.set(target, { cmd: 'claude', cwd }); // visible as "starting" right away
+      broadcast();
       setTimeout(pollAgents, 700);
       res.json({ ok: true, name, target });
     });
@@ -798,10 +967,13 @@ app.post('/api/config', (req, res) => {
   res.json(config);
 });
 
-// static UI + vendored xterm straight out of node_modules (still fully local)
-app.use('/vendor/xterm', express.static(path.join(__dirname, 'node_modules/@xterm/xterm')));
-app.use('/vendor/addon-fit', express.static(path.join(__dirname, 'node_modules/@xterm/addon-fit')));
-app.use(express.static(path.join(__dirname, 'public')));
+// static UI + vendored xterm straight out of node_modules (still fully local).
+// no-cache = browsers must revalidate every file on every load, so a reload
+// can never pair fresh HTML with a stale cached app.js (cheap on localhost).
+const noStale = { setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') };
+app.use('/vendor/xterm', express.static(path.join(__dirname, 'node_modules/@xterm/xterm'), noStale));
+app.use('/vendor/addon-fit', express.static(path.join(__dirname, 'node_modules/@xterm/addon-fit'), noStale));
+app.use(express.static(path.join(__dirname, 'public'), noStale));
 
 // ---------------------------------------------------------------- websockets
 
@@ -829,6 +1001,9 @@ function attachTerminal(ws, req) {
   const fail = (msg) => { try { ws.send(JSON.stringify({ type: 'error', message: msg })); ws.close(); } catch {} };
   if (!target || !/^cc-[\w.-]+$/.test(target)) return fail('bad tmux target');
   if (!tmuxSessions.has(target)) return fail('tmux session not found — launch it with cc');
+  // sessions created before these options existed (or by older cc) get them on attach
+  execFile(TMUX_BIN, ['set-option', '-t', target, 'mouse', 'on',
+    ...TMUX_WHEEL_BINDINGS], { timeout: 3000 }, () => {});
   let pty;
   try { pty = require('node-pty'); } catch { return fail('node-pty unavailable'); }
   let proc;
@@ -840,12 +1015,54 @@ function attachTerminal(ws, req) {
   } catch (e) { return fail('tmux attach failed: ' + e.message); }
   proc.onData(d => { try { ws.send(JSON.stringify({ type: 'data', data: d })); } catch {} });
   proc.onExit(() => { try { ws.close(); } catch {} });
+
+  // Scrollbar support: report where the pane sits in its history once a second,
+  // and jump to requested positions. pos counts lines above live (0 = live).
+  let lastScroll = { history: 0, pos: 0, rows: 0 };
+  const scrollPoll = setInterval(() => {
+    execFile(TMUX_BIN, ['display-message', '-p', '-t', target,
+      '#{history_size}\t#{scroll_position}\t#{pane_height}\t#{alternate_on}'], { timeout: 2000 }, (err, out) => {
+      if (err || !out) return;
+      const [h, p, r, a] = out.trim().split('\t');
+      lastScroll = { history: +h || 0, pos: +p || 0, rows: +r || 0, alt: +a || 0 };
+      try { ws.send(JSON.stringify({ type: 'scroll', ...lastScroll })); } catch {}
+    });
+  }, 1000);
+
   ws.on('message', raw => {
     let m; try { m = JSON.parse(raw); } catch { return; }
     if (m.type === 'input' && typeof m.data === 'string') proc.write(m.data);
     if (m.type === 'resize' && m.cols && m.rows) { try { proc.resize(m.cols, m.rows); } catch {} }
+    // full-screen claude UI (alternate screen): scrolling is internal to claude,
+    // driven by PageUp/PageDown — the scrollbar pages instead of positioning
+    if (m.type === 'page' && lastScroll.alt) {
+      if (m.dir === 'up' || m.dir === 'down') {
+        execFile(TMUX_BIN, ['send-keys', '-t', target, m.dir === 'up' ? 'PPage' : 'NPage'],
+          { timeout: 2000 }, () => {});
+      } else if (m.dir === 'bottom') {
+        execFile(TMUX_BIN, ['send-keys', '-t', target,
+          'NPage', 'NPage', 'NPage', 'NPage', 'NPage', 'NPage', 'NPage', 'NPage', 'NPage', 'NPage'],
+          { timeout: 2000 }, () => {});
+      }
+    }
+    if (m.type === 'scrollTo' && typeof m.pos === 'number') {
+      const want = Math.max(0, Math.min(Math.round(m.pos), lastScroll.history));
+      if (want === 0) {
+        execFile(TMUX_BIN, ['send-keys', '-X', '-t', target, 'cancel'], { timeout: 2000 }, () => {});
+      } else {
+        const delta = want - lastScroll.pos;
+        if (delta > 0) {
+          execFile(TMUX_BIN, ['copy-mode', '-e', '-t', target, ';',
+            'send-keys', '-X', '-N', String(delta), '-t', target, 'scroll-up'], { timeout: 2000 }, () => {});
+        } else if (delta < 0) {
+          execFile(TMUX_BIN, ['send-keys', '-X', '-N', String(-delta), '-t', target, 'scroll-down'],
+            { timeout: 2000 }, () => {});
+        }
+      }
+      lastScroll.pos = want; // optimistic; the poll corrects any drift
+    }
   });
-  ws.on('close', () => { try { proc.kill(); } catch {} });
+  ws.on('close', () => { clearInterval(scrollPoll); try { proc.kill(); } catch {} });
 }
 
 server.listen(PORT, '127.0.0.1', () => {

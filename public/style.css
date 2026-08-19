@@ -12,11 +12,45 @@
   --red: #cf222e;
   --blue: #1f6feb;
   --violet: #8250df;
+  --code-bg: #faf9f5;
+  --term-bg: #ffffff;           /* the embedded terminal follows the page theme */
+  --scroll-thumb: rgba(43, 40, 34, .32);
+  --scroll-thumb-hover: rgba(43, 40, 34, .55);
   --radius: 10px;
   --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
   --serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, 'Times New Roman', serif;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
+/* dark theme: same tokens, toggled by the header button (html.dark set pre-paint) */
+html.dark {
+  --bg: #191713;
+  --panel: #221f1a;
+  --panel-2: #2c2822;
+  --border: #3b352b;
+  --text: #e8e4da;
+  --muted: #a29b8b;
+  --green: #3fb950;
+  --amber: #e3b341;
+  --red: #f85149;
+  --blue: #58a6ff;
+  --violet: #a371f7;
+  --code-bg: #1d1a15;
+  --term-bg: #000000;
+  --scroll-thumb: rgba(232, 228, 218, .30);
+  --scroll-thumb-hover: rgba(232, 228, 218, .55);
+}
+
+/* one scrollbar design everywhere — the conversation pane, sidebar, folder
+   lists, and the terminal's bar all share it */
+::-webkit-scrollbar { width: 14px; height: 14px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  border: 4px solid transparent; background-clip: padding-box;
+  border-radius: 8px; min-height: 26px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); border-width: 3px; }
+::-webkit-scrollbar-corner { background: transparent; }
 
 * { box-sizing: border-box; }
 html, body { height: 100%; }
@@ -61,8 +95,12 @@ body {
 #ns-dialog {
   background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
   box-shadow: 0 12px 40px rgba(60, 50, 30, .25);
-  padding: 22px 24px; width: 440px; max-width: 92vw;
+  padding: 22px 24px; width: 440px; height: min(640px, 88vh);
+  min-width: 400px; min-height: 430px; max-width: 94vw; max-height: 92vh;
+  display: flex; flex-direction: column;
+  resize: both; overflow: hidden; /* drag the bottom-right corner; size is remembered */
 }
+#ns-dialog h3, #ns-dialog label, #ns-err, #ns-dialog .ns-row { flex-shrink: 0; }
 #ns-dialog h3 { margin: 0 0 14px; font-size: 18px; }
 #ns-dialog label {
   display: block; font-family: var(--sans); font-size: 12.5px; color: var(--muted);
@@ -81,6 +119,38 @@ body {
   background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
   padding: 8px 10px;
 }
+#ns-browse {
+  margin: -6px 0 12px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
+  font-family: var(--sans); font-size: 13px;
+  flex: 1; min-height: 120px; display: flex; flex-direction: column; overflow: hidden;
+}
+.ns-sect {
+  flex-shrink: 0;
+  padding: 5px 10px 3px;
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted);
+  background: var(--panel-2); border-bottom: 1px solid var(--border);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#ns-browse-here { border-top: 1px solid var(--border); }
+#ns-recent { flex-shrink: 0; overflow-y: auto; height: 92px; padding: 3px 0; }
+#ns-divider {
+  flex-shrink: 0; height: 9px; cursor: row-resize;
+  display: flex; align-items: center; justify-content: center;
+}
+#ns-divider::before {
+  content: ''; width: 46px; height: 3px; border-radius: 2px; background: var(--border);
+}
+#ns-divider:hover::before { background: var(--blue); }
+#ns-browse-list { overflow-y: auto; flex: 1; min-height: 60px; padding: 3px 0; }
+.ns-dir {
+  padding: 3px 10px; cursor: pointer; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ns-dir:hover { background: var(--panel-2); color: var(--blue); }
+.ns-dir.up { color: var(--muted); }
+.ns-dir.recent { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.ns-dir.recent:hover { color: var(--blue); }
 #ns-err { color: var(--red); font-family: var(--sans); font-size: 13px; min-height: 18px; }
 .ns-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
 .mini.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
@@ -133,6 +203,7 @@ body.no-sidebar #detail { right: 0; border-right: none; }
 .dot.idle { background: #c9c3b6; }
 .dot.waiting { background: var(--amber); animation: pulse .8s ease-in-out infinite; }
 .dot.ready { background: var(--blue); }
+.dot.starting { background: var(--violet); animation: pulse 1.4s ease-in-out infinite; }
 .dot.ended { background: #ddd8cc; }
 @keyframes pulse { 50% { opacity: .35; } }
 
@@ -162,6 +233,7 @@ body.no-sidebar #detail { right: 0; border-right: none; }
 .badge.needs-you { background: #f0b429; color: #201a02; }
 .badge.ready { background: var(--blue); color: #fff; }
 .badge.compacting { background: var(--violet); color: #fff; }
+.badge.starting { background: var(--panel-2); color: var(--violet); border: 1px solid var(--violet); }
 
 .card .subtitle {
   color: var(--muted); font-size: 13.5px;
@@ -233,6 +305,7 @@ body.no-sidebar #detail { right: 0; border-right: none; }
 .pr-status.SUCCESS { color: var(--green); }
 .pr-status.FAILURE, .pr-status.ERROR { color: var(--red); }
 .pr-status.PENDING, .pr-status.EXPECTED { color: #9a6700; }
+html.dark .pr-status.PENDING, html.dark .pr-status.EXPECTED, html.dark .counts .waitcount { color: #d9a944; }
 .pr-review {
   font-family: var(--sans); font-size: 10.5px; padding: 1px 6px; border-radius: 10px;
   background: var(--panel-2); color: var(--muted); flex-shrink: 0;
@@ -272,9 +345,30 @@ body.no-sidebar #detail { right: 0; border-right: none; }
 
 .panes { flex: 1; display: flex; min-height: 0; }
 /* the terminal stays dark on purpose — it's a terminal */
-#term-pane { flex: 1.2; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: #000; }
-#term { flex: 1; padding: 6px; background: #000; }
+/* padding lives on the pane, never on #term: the fit addon sizes the terminal
+   from #term's box, and padding there makes it count columns that get clipped */
+#term-pane { flex: 1.2; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--term-bg); padding: 6px; position: relative; }
+/* a real draggable scrollbar over the terminal, driven by tmux history.
+   Always present while a terminal is connected — a full-length thumb means
+   "nothing to scroll yet". Styled to match every other scrollbar on the page. */
+#term-bar {
+  position: absolute; top: 4px; bottom: 4px; right: 1px; width: 14px; z-index: 6;
+  cursor: pointer;
+}
+#term-bar-thumb {
+  position: absolute; left: 3px; right: 3px; min-height: 26px;
+  border-radius: 8px; background: var(--scroll-thumb);
+  cursor: grab;
+}
+#term-bar-thumb:hover, #term-bar.dragging #term-bar-thumb {
+  background: var(--scroll-thumb-hover); cursor: grabbing;
+}
+#term { flex: 1; min-height: 0; background: var(--term-bg); }
 #term .xterm { height: 100%; }
+/* xterm's own scrollbar never moves under tmux — hide it; #term-bar is the
+   real one. Keep the viewport on the theme background either way. */
+#term .xterm-viewport { background: var(--term-bg) !important; }
+#term .xterm-viewport::-webkit-scrollbar { width: 0; }
 
 #convo-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .pane-head {
@@ -314,7 +408,7 @@ body.no-sidebar #detail { right: 0; border-right: none; }
 .msg-body a { color: var(--blue); }
 .codeblock { position: relative; margin: 9px 0; }
 .codeblock pre {
-  margin: 0; padding: 10px 12px; background: #faf9f5; border: 1px solid var(--border);
+  margin: 0; padding: 10px 12px; background: var(--code-bg); border: 1px solid var(--border);
   border-radius: 8px; overflow-x: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.5;
 }
 .codeblock .copy-btn { position: absolute; top: 6px; right: 6px; }

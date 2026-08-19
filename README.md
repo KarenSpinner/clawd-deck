@@ -32,9 +32,12 @@ Each card shows the session's title, the prompt that started it, its folder and 
 - **Green, pulsing**: working. Leave it alone.
 - **Blue READY**: it finished its turn and is waiting for you to read the result. This fades to plain idle after 30 minutes.
 - **Amber NEEDS YOU**: it's blocked, usually on a permission prompt, and can't continue until you go click something.
+- **Violet STARTING**: launched but not checked in yet. If it sits here, click the card — the live terminal shows what it's waiting on (a sign-in screen, a trust prompt) and you can answer right there.
 - **Grey**: idle.
 
 The counter in the header ("2 working, 3 ready, 1 needs you") and the browser tab title track the same thing, so you can park the dashboard on a second monitor and glance at it.
+
+The header also has a light/dark toggle — the whole page switches, including the embedded terminals, which re-color in place. The "hide panel / show panel" button collapses the sidebar when you want the cards (or a session's terminal) at full width. On cards, the tinted `@ home` / `@ work` chip is the account the session runs under.
 
 ### Titles
 
@@ -48,7 +51,7 @@ Three tabs. **To-dos** gathers every session's task list in one place. **Artifac
 
 Click any card. You get the full conversation, rendered as a readable document: your prompts, Claude's answers, working links, formatted code. Every message has a copy button, and so does every code block. What you copy is exactly what Claude wrote. No soft line wraps, no bullet symbols, no leading spaces.
 
-If the session was started with `cc` (below), you also get a live terminal beside the conversation, and you can type into it from the browser.
+If the session was started with `cc` (below), you also get a live terminal beside the conversation, and you can type into it from the browser. To scroll it, drag the **scrollbar** on the terminal's right edge — same motion as the conversation pane's scrollbar. It moves through the session's full history; drag to the bottom and you're back at the live prompt. A trackpad or wheel works too. The bar is always there while a terminal is connected — a full-length thumb means there's nothing to scroll yet (nothing has left the screen, or a full-screen view like a menu owns the screen until it's closed; the bar's tooltip says which). Keyboard arrow keys are claude's own prompt-history keys, not scrolling. One trade: with the mouse handed to tmux, select text by holding **Shift** while dragging — or just use the copy-paste view, which is the better copy surface anyway.
 
 You can also link straight to a session: `http://localhost:4839/?session=<id>`.
 
@@ -66,6 +69,8 @@ That starts Claude with the display name `golden-hour` in a tmux session the das
 
 A useful side effect: because tmux owns the session, closing the terminal tab doesn't kill it. The session keeps running, and `cc golden-hour` from any terminal picks it back up.
 
+The **+ New session** button does the same thing from the browser: pick a folder (type a path or browse the folder tree in the dialog), name the session, pick an account, and the dashboard opens straight into the new session's live terminal. The dialog resizes from its bottom-right corner, and the small bar between the recent list and the folder list drags to portion the space between them — both are remembered.
+
 To put `cc` on your PATH, add this to `~/.zshrc` and open a new terminal:
 
 ```
@@ -74,7 +79,20 @@ export PATH="$HOME/claude-deck/bin:$PATH"
 
 ## Multiple Claude accounts
 
-The dashboard supports account profiles, listed in `config.json` under `profiles`. Each profile gets its own config directory, its own sessions, transcripts, and memory, an account chip on its cards, and an entry in the New session dialog's account picker.
+Account profiles live in `profiles.json` in the project folder — a file that is yours to edit and that the server never writes, so your edits always stick. (They used to live in `config.json`, where the title cache overwrote hand edits; the server migrates old setups automatically.) The server watches the file, so changes apply within a few seconds, no restart needed:
+
+```json
+{
+  "main": { "label": "home" },
+  "profiles": [
+    { "id": "work", "label": "work", "dir": "~/.claude-profiles/work" }
+  ]
+}
+```
+
+`main` is whatever `~/.claude` is logged into — the label is just what you want to call it. Each extra profile gets its own config directory, its own sessions, transcripts, and memory, an account chip on its cards, and an entry in the New session dialog's account picker.
+
+The server seeds a new profile directory automatically, so the first session under it boots to Claude's sign-in screen instead of the first-run wizard — and since new sessions now open straight into their live terminal, that sign-in screen is something you can see and type into. Seeding also opts the profile out of Claude Code's fullscreen renderer (`CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`), which is the default for newly created profiles and would otherwise leave the terminal with no scrollback; sessions in fullscreen mode anyway (someone ran `/tui fullscreen`) still scroll — the dashboard's scrollbar pages them instead.
 
 One thing to understand about how Claude Code works on a Mac: interactive logins live in a single shared keychain entry, no matter which config directory a session uses. Running `/login` anywhere switches the account for every session that relies on that shared login. So the main profile's chip describes a shared login, not a per-session fact, and its tooltip says so.
 
@@ -86,12 +104,12 @@ To give a second profile its own account for real, use a long-lived token instea
 4. Save the token as a single line in the profile's directory, named `token`, and make it private:
 
 ```
-chmod 600 ~/.claude-profiles/personal/token
+chmod 600 ~/.claude-profiles/work/token
 ```
 
 The dashboard reads that file and pins every session it starts under that profile to that account, independent of the keychain. The token grants access to the account, so treat the file like a password. From then on, both accounts run at the same time and every chip is truthful.
 
-Wire a new profile's hooks the same way as the main ones: `node setup-hooks.js --dir ~/.claude-profiles/personal`.
+Wire a new profile's hooks the same way as the main ones: `node setup-hooks.js --dir ~/.claude-profiles/work`.
 
 ## Memory updates
 

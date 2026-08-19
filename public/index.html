@@ -7,6 +7,8 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦞</text></svg>">
 <link rel="stylesheet" href="/vendor/xterm/css/xterm.css">
 <link rel="stylesheet" href="/style.css">
+<script>/* before first paint, so a dark preference never flashes light */
+if (localStorage.getItem('deckTheme') === 'dark') document.documentElement.classList.add('dark');</script>
 </head>
 <body>
 
@@ -20,7 +22,8 @@
     <option value="context">Sort: context used</option>
   </select>
   <button id="newSession" class="ctl btn-new" title="Start a new Claude session you can type into right here">+ New session</button>
-  <button id="sideToggle" class="ctl" title="Show or hide the side panel">◫</button>
+  <button id="themeToggle" class="ctl" title="Switch between light and dark. The embedded terminals follow."></button>
+  <button id="sideToggle" class="ctl"></button>
   <label class="toggle" title="When a session ends, a background Claude reads it and saves anything worth remembering. Each session close costs one short run, so leave this off unless you want it.">
     <input type="checkbox" id="autoNudge"> auto-memory on session end
   </label>
@@ -52,6 +55,9 @@
   <div class="panes">
     <div id="term-pane" class="hidden">
       <div id="term"></div>
+      <div id="term-bar" class="hidden" title="Drag to scroll through the session">
+        <div id="term-bar-thumb"></div>
+      </div>
     </div>
     <div id="convo-pane">
       <div class="pane-head">Conversation <span class="hint">· the copy buttons give you clean text, exactly as written</span></div>
@@ -64,9 +70,15 @@
   <div id="ns-dialog">
     <h3>New session</h3>
     <label>Folder
-      <input id="ns-cwd" list="ns-dirs" placeholder="~/some-project" autocomplete="off">
+      <input id="ns-cwd" placeholder="type a path or browse below" autocomplete="off" spellcheck="false">
     </label>
-    <datalist id="ns-dirs"></datalist>
+    <div id="ns-browse">
+      <div id="ns-recent-head" class="ns-sect">recent projects</div>
+      <div id="ns-recent"></div>
+      <div id="ns-divider" title="Drag to give the two lists more or less room"></div>
+      <div id="ns-browse-here" class="ns-sect"></div>
+      <div id="ns-browse-list"></div>
+    </div>
     <label>Name
       <input id="ns-name" placeholder="what this session is for" autocomplete="off">
     </label>
