@@ -973,6 +973,7 @@ app.post('/api/config', (req, res) => {
 const noStale = { setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') };
 app.use('/vendor/xterm', express.static(path.join(__dirname, 'node_modules/@xterm/xterm'), noStale));
 app.use('/vendor/addon-fit', express.static(path.join(__dirname, 'node_modules/@xterm/addon-fit'), noStale));
+app.use('/vendor/addon-web-links', express.static(path.join(__dirname, 'node_modules/@xterm/addon-web-links'), noStale));
 app.use(express.static(path.join(__dirname, 'public'), noStale));
 
 // ---------------------------------------------------------------- websockets

@@ -745,6 +745,10 @@ function connectTerm(s) {
   });
   fitAddon = new FitAddon.FitAddon();
   term.loadAddon(fitAddon);
+  // plain URLs in the output become clickable, like in a regular terminal
+  term.loadAddon(new WebLinksAddon.WebLinksAddon((e, uri) => window.open(uri, '_blank', 'noopener')));
+  // real hyperlink escapes (OSC 8), should anything emit them, open the same way
+  term.options.linkHandler = { activate: (e, uri) => window.open(uri, '_blank', 'noopener') };
   term.open($('#term'));
   fitAddon.fit();
 
