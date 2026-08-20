@@ -17,7 +17,8 @@ The dashboard fixes all three. It watches every session, labels each one in plai
 Built and tested on macOS.
 
 ```
-cd ~/claude-deck
+git clone https://github.com/KarenSpinner/clawd-deck.git
+cd clawd-deck
 npm install
 node setup-hooks.js
 npm start
@@ -47,7 +48,7 @@ The header also has a light/dark toggle — the whole page switches, including t
 
 ### Titles
 
-Claude Code names most sessions after their folder plus two random characters, like `cortex-b0`, which tells you nothing. For those, the dashboard writes a short descriptive title from the session's first prompt. It uses one tiny background Claude call per session and caches the answer forever in `config.json`, so nothing gets renamed twice. Sessions with deliberate names are left alone. The **rename** button on any card sets your own title, which always wins. Hovering the title shows the real underlying session name in case you need it for `/resume`.
+Claude Code names most sessions after their folder plus two random characters, like `myapp-b0`, which tells you nothing. For those, the dashboard writes a short descriptive title from the session's first prompt. It uses one tiny background Claude call per session and caches the answer forever in `config.json`, so nothing gets renamed twice. Sessions with deliberate names are left alone. The **rename** button on any card sets your own title, which always wins. Hovering the title shows the real underlying session name in case you need it for `/resume`.
 
 ### The sidebar
 
@@ -84,7 +85,7 @@ The **+ New session** button does the same thing from the browser: pick a folder
 To put `cc` on your PATH, add this to `~/.zshrc` and open a new terminal:
 
 ```
-export PATH="$HOME/claude-deck/bin:$PATH"
+export PATH="$HOME/clawd-deck/bin:$PATH"
 ```
 
 ## Multiple Claude accounts
@@ -139,9 +140,9 @@ Save this as `~/Library/LaunchAgents/cc.claude-deck.plist`, adjust the two paths
   <key>ProgramArguments</key>
   <array>
     <string>/opt/homebrew/bin/node</string>
-    <string>/Users/karenspinner/claude-deck/server.js</string>
+    <string>/Users/you/clawd-deck/server.js</string>
   </array>
-  <key>WorkingDirectory</key><string>/Users/karenspinner/claude-deck</string>
+  <key>WorkingDirectory</key><string>/Users/you/clawd-deck</string>
   <key>EnvironmentVariables</key>
   <dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
   <key>RunAtLoad</key><true/>
