@@ -14,6 +14,8 @@ The dashboard fixes all three. It watches every session, labels each one in plai
 
 ## Quick start
 
+Built and tested on macOS.
+
 ```
 cd ~/claude-deck
 npm install
@@ -23,17 +25,21 @@ npm start
 
 Then open [http://localhost:4839](http://localhost:4839). Sessions you already have open appear on their own, usually within a few seconds. Nothing needs restarting.
 
-The `setup-hooks.js` step wires the dashboard's event hooks into your `~/.claude/settings.json`. It only appends what's missing, backs the file up first, and is safe to run again. The dashboard works without it (statuses come from polling), but hooks add instant updates, live to-do lists, and the needs-you notifications.
+The `setup-hooks.js` step wires the dashboard's event hooks into your `~/.claude/settings.json`. It only appends what's missing, backs the file up first, and is safe to run again. The dashboard works without it (statuses come from polling), but hooks add instant updates and the needs-you notifications.
 
 ## Reading the board
 
-Each card shows the session's title, the prompt that started it, its folder and git branch, a context meter, and its current to-do list. The status dot and badge tell you what matters:
+Each card shows the session's title (up to two lines), the prompt that started it, its folder, its account chip, a context meter, and a count of the files it has produced. Every status is spelled out in words on the card:
 
-- **Green, pulsing**: working. Leave it alone.
-- **Blue READY**: it finished its turn and is waiting for you to read the result. This fades to plain idle after 30 minutes.
-- **Amber NEEDS YOU**: it's blocked, usually on a permission prompt, and can't continue until you go click something.
-- **Violet STARTING**: launched but not checked in yet. If it sits here, click the card — the live terminal shows what it's waiting on (a sign-in screen, a trust prompt) and you can answer right there.
-- **Grey**: idle.
+- **WORKING** (green, pulsing): mid-task. Leave it alone.
+- **READY** (blue): it finished its turn and is waiting for you to read the result. This fades to idle after 30 minutes.
+- **NEEDS YOU** (amber): it's blocked, usually on a permission prompt, and can't continue until you go click something.
+- **STARTING** (violet): launched but not checked in yet. If it sits here, click the card — the live terminal shows what it's waiting on (a sign-in screen, a trust prompt) and you can answer right there.
+- **IDLE** (grey): nothing happening right now.
+
+Cards are all the same size, with the same three buttons in the same spot at the bottom: **rename**, **update memory**, and **kill**. Kill ends the session for real — the tmux session and the Claude process — after a confirmation. It's also in the session view's header.
+
+The board only shows sessions you can type into. Claude Code spawns sessions of its own (background agents, short scripted runs) that report the same events; the dashboard tells them apart by checking for an attached terminal and keeps them off the board.
 
 The counter in the header ("2 working, 3 ready, 1 needs you") and the browser tab title track the same thing, so you can park the dashboard on a second monitor and glance at it.
 
@@ -41,17 +47,21 @@ The header also has a light/dark toggle — the whole page switches, including t
 
 ### Titles
 
-Claude Code names most sessions after their folder plus two random characters, like `cortex-b0`, which tells you nothing. For those, the dashboard writes a short descriptive title from the session's first prompt. It uses one tiny background Claude call per session and caches the answer forever in `config.json`, so nothing gets renamed twice. Sessions with deliberate names are left alone. Hover a card and click the pencil to set your own title, which always wins. Hovering the title shows the real underlying session name in case you need it for `/resume`.
+Claude Code names most sessions after their folder plus two random characters, like `cortex-b0`, which tells you nothing. For those, the dashboard writes a short descriptive title from the session's first prompt. It uses one tiny background Claude call per session and caches the answer forever in `config.json`, so nothing gets renamed twice. Sessions with deliberate names are left alone. The **rename** button on any card sets your own title, which always wins. Hovering the title shows the real underlying session name in case you need it for `/resume`.
 
 ### The sidebar
 
-Three tabs. **To-dos** gathers every session's task list in one place. **Artifacts** collects the files and published links each session has produced. **PRs** shows your open GitHub pull requests, split into ones you wrote and ones waiting on your review, with test status and review state on each row.
+Two tabs. **Artifacts** collects the files and published links each session has produced, grouped by session — clicking the file count on any card jumps straight to that session's group. **PRs** shows your open GitHub pull requests, split into ones you wrote and ones waiting on your review, with test status and review state on each row.
+
+(An earlier version had a To-dos tab. It never showed a single item in a week of daily use, because sessions on current Claude Code don't write to-do lists, so it's gone. The plumbing remains; if a future version brings task lists back, they'll reappear on the cards.)
 
 ## Inside a session
 
 Click any card. You get the full conversation, rendered as a readable document: your prompts, Claude's answers, working links, formatted code. Every message has a copy button, and so does every code block. What you copy is exactly what Claude wrote. No soft line wraps, no bullet symbols, no leading spaces.
 
-If the session was started with `cc` (below), you also get a live terminal beside the conversation, and you can type into it from the browser. To scroll it, drag the **scrollbar** on the terminal's right edge — same motion as the conversation pane's scrollbar. It moves through the session's full history; drag to the bottom and you're back at the live prompt. A trackpad or wheel works too. The bar is always there while a terminal is connected — a full-length thumb means there's nothing to scroll yet (nothing has left the screen, or a full-screen view like a menu owns the screen until it's closed; the bar's tooltip says which). Keyboard arrow keys are claude's own prompt-history keys, not scrolling. One trade: with the mouse handed to tmux, select text by holding **Shift** while dragging — or just use the copy-paste view, which is the better copy surface anyway.
+If the session was started with `cc` (below), you also get a live terminal beside the conversation, and you can type into it from the browser. The terminal takes keyboard focus as soon as the view opens; if your keystrokes would go nowhere, a small "click the terminal to type" note appears. The **A− / A+** buttons in the header resize the terminal text, and the size is remembered per browser.
+
+To scroll, drag the **scrollbar** on the terminal's right edge — same motion as the conversation pane's scrollbar. It moves through the session's full history, and whenever you're up in the past, a **back to latest** button appears; one click returns you to the live prompt. A trackpad or wheel works too. The bar is always there while a terminal is connected — a full-length thumb means there's nothing to scroll yet (nothing has left the screen, or a full-screen view like a menu owns the screen until it's closed; the bar's tooltip says which). Keyboard arrow keys are claude's own prompt-history keys, not scrolling. One trade: with the mouse handed to tmux, select text by holding **Shift** while dragging — or just use the copy-paste view, which is the better copy surface anyway.
 
 You can also link straight to a session: `http://localhost:4839/?session=<id>`.
 
@@ -94,20 +104,19 @@ Account profiles live in `profiles.json` in the project folder — a file that i
 
 The server seeds a new profile directory automatically, so the first session under it boots to Claude's sign-in screen instead of the first-run wizard — and since new sessions now open straight into their live terminal, that sign-in screen is something you can see and type into. Seeding also opts the profile out of Claude Code's fullscreen renderer (`CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`), which is the default for newly created profiles and would otherwise leave the terminal with no scrollback; sessions in fullscreen mode anyway (someone ran `/tui fullscreen`) still scroll — the dashboard's scrollbar pages them instead.
 
-One thing to understand about how Claude Code works on a Mac: interactive logins live in a single shared keychain entry, no matter which config directory a session uses. Running `/login` anywhere switches the account for every session that relies on that shared login. So the main profile's chip describes a shared login, not a per-session fact, and its tooltip says so.
+Where the sign-ins live (verified against Claude Code's docs and a live two-account setup): on a Mac, each config directory gets its own entry in the system Keychain, so both accounts stay signed in side by side and logging into one doesn't touch the other. On Windows and Linux there is no Keychain; the credentials are a user-restricted `.credentials.json` file inside each config directory. Same separation, different container. Nothing extra to set up in either case.
 
-To give a second profile its own account for real, use a long-lived token instead of the shared login:
+If you ever do see sessions swap accounts, or you want to pin a profile explicitly, a long-lived token overrides the stored login:
 
-1. Pick a quiet moment (the swap below briefly affects running sessions).
-2. `/login` to the second account in any terminal, then run `claude setup-token` and copy the token it prints.
-3. `/login` back to your usual account.
-4. Save the token as a single line in the profile's directory, named `token`, and make it private:
+1. `/login` to the second account in any terminal, run `claude setup-token`, and copy the token it prints.
+2. `/login` back to your usual account.
+3. Save the token as a single line in the profile's directory, named `token`, and make it private:
 
 ```
 chmod 600 ~/.claude-profiles/work/token
 ```
 
-The dashboard reads that file and pins every session it starts under that profile to that account, independent of the keychain. The token grants access to the account, so treat the file like a password. From then on, both accounts run at the same time and every chip is truthful.
+The dashboard reads that file and pins every session it starts under that profile to that account. The token grants access to the account, so treat the file like a password.
 
 Wire a new profile's hooks the same way as the main ones: `node setup-hooks.js --dir ~/.claude-profiles/work`.
 
@@ -146,7 +155,7 @@ Save this as `~/Library/LaunchAgents/cc.claude-deck.plist`, adjust the two paths
 
 Three data sources, most reliable first:
 
-1. `claude agents --json`, a supported Claude Code command that lists live sessions with their names and statuses. The server polls it every few seconds.
+1. `claude agents --json`, a supported Claude Code command that lists live sessions with their names and statuses. The server polls it every few seconds, and uses it to tell your sessions from Claude's own machinery: a session only gets a card if it's interactive and has a terminal attached.
 2. Claude Code hooks. A one-line shell script POSTs each session event (prompt sent, turn finished, permission needed, to-dos changed) to the server. If the server is down, the script gives up after one second and the session never notices.
 3. The transcript files Claude Code writes to disk. These power the context meter, the conversation view, and the artifacts list. Their format is officially undocumented and can change between Claude Code releases, so the parsers fail soft: if a field disappears someday, that feature greys out instead of taking the dashboard down.
 
