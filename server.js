@@ -66,6 +66,7 @@ const dismissed = new Set();      // ended cards the user closed; cleared if the
 // alone would put them on the board as anonymous cards. The poller classifies
 // every id it sees; the snapshot keeps machinery off the board.
 const sessionKinds = new Map();
+const pollerOkAt = new Map(); // profileId -> last time `claude agents --json` answered for it
 let tmuxSessions = new Set(); // names of live tmux sessions ("cc-foo")
 let tmuxPanes = new Map();    // tmux session name -> { cmd, cwd } of its first pane
 let prs = { mine: [], needsMe: [], error: null, updatedAt: 0 };
@@ -98,6 +99,7 @@ function getSession(id) {
     sessions.set(id, {
       sessionId: id,
       profileId: 'main',
+      profileMatched: false, // true once a hook's transcript_path placed it under a registered profile
       name: null,
       subtitle: null,      // first prompt from history.jsonl
       cwd: null,
@@ -232,12 +234,16 @@ function snapshot() {
       if (sessionKinds.get(s.sessionId) === 'interactive') {
         return s.alive || (s.endedAt && Date.now() - s.endedAt < ENDED_RETENTION_MS);
       }
-      // hook-only, never confirmed as a real terminal session by the poller:
-      // a genuine session gets confirmed within ~3s, so anything still
-      // unconfirmed after a minute is a session from an unregistered profile
-      // (show it) — while short-lived spawned runs never make it to the board,
-      // and leave no "ended" corpse when they finish
-      return s.alive && Date.now() - s.firstSeenAt > 60000;
+      // hook-only, never confirmed as a real terminal session by the poller.
+      // A genuine session in a polled profile is listed within ~3s; one that
+      // never shows up there is machinery — typically a background agent that
+      // died with its parent and skipped SessionEnd — so keep it off the board
+      // for good. The minute-long grace is only for sessions whose profile we
+      // can't poll: an unregistered config dir, or a poller that's failing.
+      if (!s.alive) return false;
+      const polled = s.profileMatched && Date.now() - (pollerOkAt.get(s.profileId) || 0) < 30000;
+      if (polled) return false;
+      return Date.now() - s.firstSeenAt > 60000;
     })
     .map(publicSession);
   // every tmux target any known session ever claimed, visible or not, so a
@@ -391,6 +397,7 @@ function pollAgentsForProfile(prof) {
 }
 
 function classifyAndIngest(prof, list, ttys) {
+  pollerOkAt.set(prof.id, Date.now());
   const seen = new Set();
   for (const a of list) {
     if (!a || !a.sessionId) continue;
@@ -573,7 +580,8 @@ function refreshTranscriptTails() {
           + (u.cache_creation_input_tokens || 0) + (u.output_tokens || 0);
         if (total > 0) {
           s.contextTokens = total;
-          s.contextPct = Math.min(100, Math.round((total / CONTEXT_WINDOW) * 1000) / 10);
+          // whole percent: a decimal adds nothing at a glance and widens the meta row
+          s.contextPct = Math.min(100, Math.round((total / CONTEXT_WINDOW) * 100));
         }
         if (e.message.model) s.model = e.message.model;
         break;
@@ -842,7 +850,12 @@ app.post('/hook/:event', (req, res) => {
     s.transcriptPath = b.transcript_path;
     // a transcript under a profile's directory tells us which account this is
     for (const p of profilesCache) {
-      if (p.dir && b.transcript_path.startsWith(p.dir + path.sep)) { s.profileId = p.id; break; }
+      if (p.dir && b.transcript_path.startsWith(p.dir + path.sep)) {
+        s.profileId = p.id; s.profileMatched = true; break;
+      }
+    }
+    if (!s.profileMatched && b.transcript_path.startsWith(CLAUDE_DIR + path.sep)) {
+      s.profileId = 'main'; s.profileMatched = true;
     }
   }
   if (b.cwd) s.cwd = s.cwd || b.cwd;

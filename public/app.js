@@ -258,9 +258,16 @@ function renderGrid() {
       if (typeof s.contextPct === 'number') {
         const gl = document.createElement('div');
         gl.className = 'gauge-label';
-        gl.textContent = `context ${s.contextPct}%` +
-          (s.contextTokens ? ` · ${Math.round(s.contextTokens / 1000)}k` : '') +
-          (s.lastActivityAt ? ` · active ${ago(s.lastActivityAt)}` : '');
+        // the token count sits in its own span so a narrow card can drop it
+        // (style.css container query) instead of cutting the line to "active …"
+        gl.append(`context ${s.contextPct}%`);
+        if (s.contextTokens) {
+          const tok = document.createElement('span');
+          tok.className = 'tok';
+          tok.textContent = ` · ${Math.round(s.contextTokens / 1000)}k`;
+          gl.appendChild(tok);
+        }
+        if (s.lastActivityAt) gl.append(` · active ${ago(s.lastActivityAt)}`);
         meta.appendChild(gl);
       }
       const msp = document.createElement('span');
@@ -319,18 +326,26 @@ function renderGrid() {
       fetch(`/api/session/${s.sessionId}/memory-nudge`, { method: 'POST' });
     });
     actions.appendChild(mem);
-    if (s.killable && s.status !== 'ended') {
+    if (s.status !== 'ended') {
       const kill = document.createElement('button');
       kill.className = 'mini kill';
-      kill.textContent = 'kill';
-      kill.title = 'End this session for real — closes its Claude process (and tmux window). ' +
-        'Use × on the ended card afterwards to clear it.';
+      if (s.killable) {
+        kill.textContent = 'kill';
+        kill.title = 'End this session for real — closes its Claude process (and tmux window). ' +
+          'Use × on the ended card afterwards to clear it.';
+      } else {
+        // a card with no process or terminal behind it (a session that reported
+        // in by hook and then vanished) still needs a way off the board
+        kill.textContent = 'remove';
+        kill.title = 'Nothing is attached to this card — no terminal, no process — so this ' +
+          'just clears it. If the session is alive after all, its next activity brings it back.';
+      }
       kill.addEventListener('click', (e) => {
         e.stopPropagation();
-        if (!window.confirm(`End the session "${s.name || s.sessionId.slice(0, 8)}"? ` +
+        if (s.killable && !window.confirm(`End the session "${s.name || s.sessionId.slice(0, 8)}"? ` +
           'Its Claude process exits and anything unfinished there stops.')) return;
         kill.disabled = true;
-        kill.textContent = 'killing…';
+        kill.textContent = s.killable ? 'killing…' : 'removing…';
         fetch(`/api/session/${s.sessionId}/kill`, { method: 'POST' });
       });
       actions.appendChild(kill);
@@ -483,7 +498,7 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && detailSe
 $('#detail-kill').addEventListener('click', () => {
   const s = findDetailSession();
   if (!s) return;
-  if (!window.confirm(`End the session "${s.name || s.sessionId.slice(0, 8)}"? ` +
+  if (s.killable && !window.confirm(`End the session "${s.name || s.sessionId.slice(0, 8)}"? ` +
     'Its Claude process exits and anything unfinished there stops.')) return;
   fetch(`/api/session/${s.sessionId}/kill`, { method: 'POST' });
   closeDetail();
@@ -501,7 +516,12 @@ function renderDetail(fresh) {
   $('#detail-meta').textContent =
     `${shortPath(s.cwd || '')}${s.gitBranch ? ' ⎇ ' + s.gitBranch : ''}` +
     `${typeof s.contextPct === 'number' ? ' · context ' + s.contextPct + '%' : ''} · ${s.status}`;
-  $('#detail-kill').classList.toggle('hidden', !(s.killable && s.status !== 'ended'));
+  const dk = $('#detail-kill');
+  dk.classList.toggle('hidden', s.status === 'ended');
+  dk.textContent = s.killable ? 'kill session' : 'remove card';
+  dk.title = s.killable
+    ? 'End this session for real — closes its Claude process (and tmux window)'
+    : 'Nothing is attached to this card — no terminal, no process — so this just clears it';
   if (fresh) {
     // embedded sessions open terminal-first; the conversation pane waits until
     // asked for (or until the user's last choice says otherwise)

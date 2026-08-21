@@ -295,6 +295,11 @@ body.no-sidebar #detail { right: 0; border-right: none; }
   display: flex; flex-direction: column; gap: 8px; align-items: stretch;
 }
 .card .meta-row { display: flex; align-items: center; gap: 8px; min-height: 24px; }
+/* on a narrow card the stats line and the file chip can't share the row in
+   full; drop the token count (the bar and percent already carry it) rather
+   than let the line get cut to "active …" */
+.card { container-type: inline-size; }
+@container (max-width: 320px) { .card .gauge-label .tok { display: none; } }
 .card .meta-row .artifact-count { margin-right: -8px; }
 .card .actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
 .card .spacer { flex: 1; }
@@ -317,6 +322,7 @@ body.no-sidebar #detail { right: 0; border-right: none; }
   font-size: 12.5px; color: var(--muted); font-family: var(--sans);
   background: none; border: 1px solid transparent; border-radius: 6px;
   padding: 3px 8px; min-height: 24px; cursor: pointer;
+  white-space: nowrap; flex-shrink: 0; /* the chip never breaks or squeezes; the label beside it gives way */
 }
 .artifact-count:hover { color: var(--blue); border-color: var(--border); background: var(--panel-2); }
 
